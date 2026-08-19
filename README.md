@@ -37,6 +37,33 @@ Things that survive but **change shape**:
   metrics. Booleans especially: `True` is an `int` in Python, and logging it as
   `1.0` would invent data that was never measured.
 
+### Your W&B data is never touched
+
+Migrating **reads** from W&B and writes to MLflow. That is the whole of it. The
+migration path calls exactly five things on the W&B API — `runs()`,
+`scan_history()`, `files()`, `logged_artifacts()` and `download()` — all of them
+reads. Nothing in `plan`, `migrate` or `verify` can create, modify or delete a
+W&B run, artifact or project.
+
+Keep W&B as long as you like. Migrate, run `verify`, look at the result in
+`mlflow ui`, and decide afterwards. If the migration is wrong, the originals are
+still there — which is the point.
+
+This is enforced, not merely intended:
+
+- A test parses the source adapter's AST and fails the build if it calls any
+  mutating W&B method.
+- Another asserts the package contains **exactly one** `delete` call anywhere,
+  and that it is in the seeder.
+- That one call is guarded *at the point of deletion* — not just in the CLI — and
+  refuses any project whose name does not start with `w2m-selftest-`, the prefix
+  only this tool's own self-test projects carry. A library caller cannot bypass
+  it either.
+
+The only thing `seed --cleanup` and the `demo` output ever offer to delete is the
+disposable self-test project the tool created minutes earlier. It will refuse to
+touch anything else, and it never deletes anything without being asked.
+
 **[MAPPING.md](MAPPING.md) is the full contract**, and it is what the test suite
 asserts against. Every drop above is counted, surfaced in the CLI report, and
 written to the `wandb.dropped` tag on the migrated run.

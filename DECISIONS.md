@@ -367,3 +367,25 @@ came from `MLFLOW_TRACKING_URI`.**
 A: Fixed to print `client.tracking_uri`, the effective URI. The old message sent
 the reader to an empty store — the one moment the tool has someone's attention
 is a bad one to be wrong about where the data is.
+
+## Read-only guarantee
+
+**Q: Should the tool ever delete migrated W&B data, or offer to?**
+A: No — and this was raised by the user rather than the spec, which is silent on
+it. W&B is the user's insurance policy: they keep it precisely so that if the
+migration turns out to be wrong, the originals still exist. A tool that migrates
+*and* mutates the source destroys the thing that makes it safe to try in the
+first place. There is no `--delete-source` flag and there will not be one.
+
+Migration touches exactly five W&B API calls — `runs()`, `scan_history()`,
+`files()`, `logged_artifacts()`, `download()` — all reads.
+
+Made enforceable rather than left as a convention:
+
+- An AST test fails the build if `source.py` calls any mutating W&B method.
+- Another asserts the whole package contains exactly one `delete` call, in the
+  seeder. If that count ever changes, someone added a way to destroy user data.
+- The prefix guard moved **into** `seed.cleanup()`, the function that actually
+  deletes, having previously lived only in `cli._cleanup`. A guard a library
+  caller can bypass is not a guard, and this is the single code path in the
+  package capable of destroying anything.

@@ -365,7 +365,10 @@ def _cleanup(entity: str, project: str, yes: bool) -> None:
     if not yes and not typer.confirm("Delete them?", default=False):
         echo("Nothing was deleted.")
         raise typer.Exit(1)
-    deleted = seed_module.cleanup(entity, project)
+    try:
+        deleted = seed_module.cleanup(entity, project)
+    except seed_module.NotASeededProjectError as exc:
+        raise typer.BadParameter(str(exc)) from None
     echo(f"Deleted {deleted} runs.")
     echo(
         "The empty project itself remains: W&B's public API has no project delete. "

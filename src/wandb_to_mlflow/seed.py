@@ -605,13 +605,32 @@ def _seed_sweep(
     return str(sweep_id), ids
 
 
+def is_seeded_project(project: str) -> bool:
+    """Only projects this tool created carry the seeded prefix."""
+    return bool(project) and project.startswith(PROJECT_PREFIX)
+
+
+class NotASeededProjectError(RuntimeError):
+    """Refusing to delete runs from a project this tool did not create."""
+
+
 def cleanup(entity: str, project: str) -> int:
-    """Delete every run in a seeded project. Returns how many were deleted.
+    """Delete every run in a **seeded** project. Returns how many were deleted.
+
+    The prefix check lives here, in the function that actually deletes, and not
+    only in the CLI that calls it. This is the one code path in the package that
+    can destroy data, and a guard a library caller can bypass is not a guard.
 
     W&B's public API has no project delete, so the (now empty) project shell
     stays behind and has to be removed from the web UI. Said plainly rather than
     pretended otherwise.
     """
+    if not is_seeded_project(project):
+        raise NotASeededProjectError(
+            f"{project!r} does not start with {PROJECT_PREFIX!r}, so this tool did not "
+            "create it. Refusing to delete its runs. Nothing in wandb-to-mlflow ever "
+            "deletes a W&B project it did not seed."
+        )
     import wandb
 
     api = wandb.Api()
@@ -620,8 +639,3 @@ def cleanup(entity: str, project: str) -> int:
         run.delete(delete_artifacts=True)
         deleted += 1
     return deleted
-
-
-def is_seeded_project(project: str) -> bool:
-    """Guard for ``--cleanup``: only projects this tool names look like this."""
-    return project.startswith(PROJECT_PREFIX)
