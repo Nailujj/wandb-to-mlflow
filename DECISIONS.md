@@ -450,3 +450,32 @@ migration into `sqlite:///mlflow.db` renders correctly, and the tier-2 suite
 already covered that backend precisely because "vendor-neutral" had to mean more
 than "works against the file store". The README now recommends SQLite up front
 instead of the file store, which was bad advice on my part.
+
+## Media survives better than the docs claimed
+
+**Q: Does anything of a `wandb.Image` reach MLflow?**
+A: More than MAPPING.md originally said, and the correction matters because the
+media row is the headline "what do I lose" claim.
+
+Verified on a live run that logged 5 images:
+
+- The **values** cannot become MLflow metrics and will not render as image
+  panels. That much really is lost.
+- The **files** migrate under `wandb_files/media/images/*.png` when `--files
+  true` is passed — all 5 PNGs, byte for byte.
+- W&B additionally logs a `wandb-history` artifact for **every** run, which
+  `--artifacts true` migrates: a parquet of the complete raw history including
+  every value that could not become a metric — media references, `NaN`s, bools,
+  strings — with original step numbers, at a few KB per run.
+
+So "media is not migrated" was wrong as stated. What is lost is the
+visualisation and the step-linked association, not the bytes. Both documents now
+say so, and `migrate` prints the two flags that would keep more when it sees
+media dropped and those flags are off. Someone deciding whether to cancel a
+subscription is entitled to the accurate version.
+
+**Q: Why did one run's history artifact fail to migrate the first time?**
+A: W&B finalises some artifacts asynchronously after a run ends. The run created
+last had no `logged_artifacts()` yet when the migration read it seconds later;
+`--overwrite` picked it up. Not a tool defect, but a real trap — documented in
+both MAPPING.md and the README.

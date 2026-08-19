@@ -460,3 +460,50 @@ def test_live_verify_passes_against_a_project_it_just_migrated(tracking_uri: str
     result = invoke("verify", *args)
     assert result.exit_code == 0, result.output
     assert "No unexpected loss" in result.output
+
+
+def test_migrate_points_at_the_flags_that_would_keep_media(tracking_uri: str) -> None:
+    """Media cannot become a metric, but its bytes need not be lost too."""
+    result = invoke(
+        "migrate", "-e", "acme", "-p", "demo", "--experiment", "m1", "--tracking-uri", tracking_uri
+    )
+    assert "Media was dropped as metrics. To keep more of it:" in result.output
+    assert "--files true" in result.output and "wandb_files/media/" in result.output
+    assert "per-run history parquet" in result.output
+
+
+def test_the_hint_disappears_once_both_flags_are_on(tracking_uri: str) -> None:
+    result = invoke(
+        "migrate",
+        "-e",
+        "acme",
+        "-p",
+        "demo",
+        "--experiment",
+        "m2",
+        "--files",
+        "true",
+        "--artifacts",
+        "true",
+        "--tracking-uri",
+        tracking_uri,
+    )
+    assert "To keep more of it:" not in result.output
+
+
+def test_no_media_hint_when_nothing_media_was_dropped(
+    tracking_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli.WandbProject,
+        "connect",
+        staticmethod(
+            lambda entity, project, filters=None: fixtures.FakeProject(
+                run_list=[fixtures.run_nested_config()]
+            )
+        ),
+    )
+    result = invoke(
+        "migrate", "-e", "acme", "-p", "demo", "--experiment", "m3", "--tracking-uri", tracking_uri
+    )
+    assert "To keep more of it:" not in result.output

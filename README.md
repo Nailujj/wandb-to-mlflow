@@ -12,7 +12,7 @@ lose access:
 
 | Not migrated | What that means |
 |---|---|
-| **Media and tables** | Every `wandb.Image`, `wandb.Table`, `wandb.Audio`, `wandb.Video`, plot and custom rich type logged to history is dropped. They are counted and reported per type, never silently discarded — but the data does not come across. |
+| **Media and table *panels*** | `wandb.Image`, `wandb.Table`, `wandb.Audio`, `wandb.Video` and plots cannot become MLflow metrics and will not render as charts or panels. **The underlying files do come across** if you pass `--files true` — they land as artifacts under `wandb_files/media/`. So you lose the visualisations and the step-linked association, not the pixels. Counted and reported per type either way. |
 | **Reports** | Not migrated. Export them from W&B first. |
 | **Workspace panels, custom charts, layouts** | Not migrated. MLflow has no equivalent. |
 | **Sweep configuration** | The sweep's search space, method, metric goal and early-terminate rules are not migrated. Only the sweep *id* and the parent/child structure come across. |
@@ -35,6 +35,22 @@ Things that survive but **change shape**:
   left alone.)
 - `NaN`, `±inf`, strings, lists and **booleans** are not logged as metrics. Booleans especially: `True` is an `int` in Python, and logging it as
   `1.0` would invent data that was never measured.
+
+### Two things that survive better than you might expect
+
+Pass `--files true --artifacts true` and you also get:
+
+- **The media files themselves**, under `wandb_files/media/`. Not as MLflow
+  image panels, but the bytes are there.
+- **`artifacts/run-<id>-history_v0/0000.parquet`** — W&B logs a history artifact
+  for every run automatically, and it is the complete raw history at full
+  fidelity: every media reference, `NaN`, bool and string that could not become
+  an MLflow metric, with original step numbers. A few KB per run, and the
+  closest thing to a lossless escape hatch this migration has.
+
+One caveat, learned live: W&B finalises some artifacts **asynchronously** after a
+run ends, so migrating seconds after a run finishes can miss them. Re-run with
+`--overwrite` to pick them up.
 
 ### Your W&B data is never touched
 

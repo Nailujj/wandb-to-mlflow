@@ -203,7 +203,7 @@ def format_plan(result: MigrationResult, options: MigrateOptions) -> str:
     return "\n".join(lines)
 
 
-def format_migration(result: MigrationResult) -> str:
+def format_migration(result: MigrationResult, options: MigrateOptions | None = None) -> str:
     lines: list[str] = []
     lines.append(f"Experiment: {result.experiment_name} (id {result.experiment_id})")
     lines.append(f"Migrated:   {len(result.migrated)}")
@@ -221,6 +221,21 @@ def format_migration(result: MigrationResult) -> str:
                 if k != "media_types"
             )
             lines.append(f"  {report.wandb_run_id:<24} {summary}")
+
+    # Media cannot become a metric, but its bytes need not be lost too.
+    if options is not None and any(r.dropped.media for r in result.migrated):
+        hints = []
+        if not options.include_files:
+            hints.append("--files true      keeps the media files themselves (wandb_files/media/)")
+        if not options.include_artifacts:
+            hints.append(
+                "--artifacts true  keeps W&B's per-run history parquet, "
+                "which holds the full raw history"
+            )
+        if hints:
+            lines.append("")
+            lines.append("Media was dropped as metrics. To keep more of it:")
+            lines.extend(f"  {hint}" for hint in hints)
 
     references = [r for r in result.migrated if r.reference_artifacts]
     if references:
@@ -309,7 +324,7 @@ def migrate(
             {"experiment_id": result.experiment_id, "runs": [r.as_dict() for r in result.reports]}
         )
     else:
-        echo(format_migration(result))
+        echo(format_migration(result, options))
     raise typer.Exit(1 if result.failures else 0)
 
 
@@ -434,7 +449,7 @@ def demo(
     client = build_client(tracking_uri)
     options = MigrateOptions(experiment=experiment_name, include_artifacts=True, include_files=True)
     result = Migrator(client, options).migrate_project(WandbProject.connect(entity, created))
-    echo(format_migration(result))
+    echo(format_migration(result, options))
 
     echo("")
     echo("[3/3] verifying against the manifest ...")
