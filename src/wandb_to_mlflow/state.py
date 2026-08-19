@@ -18,6 +18,7 @@ server already stores everything needed:
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +67,10 @@ class MigrationState:
         self._by_wandb_id: dict[str, ExistingRun] = {}
         self._sweep_parents: dict[str, str] = {}
         self._loaded = False
+        # Guards the two maps and, crucially, sweep-parent creation: with
+        # --workers > 1 several children of one sweep are migrated at once and
+        # would otherwise each create their own parent run.
+        self.lock = threading.RLock()
 
     # -- loading ---------------------------------------------------------- #
 
@@ -112,10 +117,12 @@ class MigrationState:
     # -- queries ---------------------------------------------------------- #
 
     def lookup(self, wandb_run_id: str) -> ExistingRun | None:
-        return self._by_wandb_id.get(wandb_run_id)
+        with self.lock:
+            return self._by_wandb_id.get(wandb_run_id)
 
     def sweep_parent(self, sweep_id: str) -> str | None:
-        return self._sweep_parents.get(sweep_id)
+        with self.lock:
+            return self._sweep_parents.get(sweep_id)
 
     @property
     def loaded(self) -> bool:
@@ -127,7 +134,8 @@ class MigrationState:
     # -- mutation --------------------------------------------------------- #
 
     def remember_sweep_parent(self, sweep_id: str, mlflow_run_id: str) -> None:
-        self._sweep_parents[sweep_id] = mlflow_run_id
+        with self.lock:
+            self._sweep_parents[sweep_id] = mlflow_run_id
 
     def discard(self, wandb_run_id: str, mlflow_run_id: str) -> None:
         """Retire a stale or half-written run.
@@ -138,12 +146,14 @@ class MigrationState:
         """
         logger.info("replacing existing MLflow run %s for W&B run %s", mlflow_run_id, wandb_run_id)
         self.client.delete_run(mlflow_run_id)
-        self._by_wandb_id.pop(wandb_run_id, None)
+        with self.lock:
+            self._by_wandb_id.pop(wandb_run_id, None)
 
     def mark_complete(self, wandb_run_id: str, mlflow_run_id: str) -> None:
         """Write the completion marker. Must be the migrator's last write for a run."""
         self.client.set_tag(mlflow_run_id, VERSION_TAG, MAPPING_VERSION)
         self.client.set_tag(mlflow_run_id, COMPLETE_TAG, "true")
-        self._by_wandb_id[wandb_run_id] = ExistingRun(
-            mlflow_run_id=mlflow_run_id, complete=True, version=MAPPING_VERSION
-        )
+        with self.lock:
+            self._by_wandb_id[wandb_run_id] = ExistingRun(
+                mlflow_run_id=mlflow_run_id, complete=True, version=MAPPING_VERSION
+            )

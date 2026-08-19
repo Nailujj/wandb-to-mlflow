@@ -18,6 +18,7 @@ import json
 import logging
 import tempfile
 from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +79,7 @@ class MigrateOptions:
     max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES
     overwrite: bool = False
     dry_run: bool = False
+    workers: int = 1
 
 
 @dataclass
@@ -244,13 +246,25 @@ class Migrator:
         else:
             self.state = None
 
-        for run in source.runs():
-            try:
-                result.reports.append(self.migrate_run(run, result.experiment_id))
-            except Exception as exc:  # deliberately broad: one bad run must not stop the rest
-                logger.exception("run %s failed to migrate", run.id)
-                result.reports.append(RunReport(wandb_run_id=run.id, error=repr(exc)))
+        runs = list(source.runs())
+        workers = max(1, self.options.workers)
+        if workers == 1:
+            result.reports.extend(self._guarded(run, result.experiment_id) for run in runs)
+        else:
+            # Reports are collected in submission order, so a migration's output
+            # does not depend on which worker happened to finish first.
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(self._guarded, run, result.experiment_id) for run in runs]
+                result.reports.extend(future.result() for future in futures)
         return result
+
+    def _guarded(self, run: SourceRun, experiment_id: str | None) -> RunReport:
+        """One run's migration, with its failure contained to itself."""
+        try:
+            return self.migrate_run(run, experiment_id)
+        except Exception as exc:  # deliberately broad: one bad run must not stop the rest
+            logger.exception("run %s failed to migrate", run.id)
+            return RunReport(wandb_run_id=run.id, error=repr(exc))
 
     # -- one run ---------------------------------------------------------- #
 
@@ -482,10 +496,17 @@ class Migrator:
         sweep_id = run.sweep_id
         if not sweep_id:
             return None
-        if self.state is not None:
+        if self.state is None:
+            return None
+        # Held across the create: two children of one sweep migrating in
+        # parallel must not each create a parent.
+        with self.state.lock:
             cached = self.state.sweep_parent(sweep_id)
             if cached:
                 return cached
+            return self._create_sweep_parent(run, experiment_id, sweep_id)
+
+    def _create_sweep_parent(self, run: SourceRun, experiment_id: str, sweep_id: str) -> str:
         parent = self.client.create_run(
             experiment_id=experiment_id,
             start_time=parse_timestamp(run.created_at),
@@ -500,8 +521,8 @@ class Migrator:
         )
         parent_id = str(parent.info.run_id)
         self.client.set_terminated(parent_id, status="FINISHED")
-        if self.state is not None:
-            self.state.remember_sweep_parent(sweep_id, parent_id)
+        assert self.state is not None
+        self.state.remember_sweep_parent(sweep_id, parent_id)
         return parent_id
 
     # -- files and artifacts ---------------------------------------------- #

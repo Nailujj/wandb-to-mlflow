@@ -114,6 +114,7 @@ def build_options(
     max_artifact_size: str,
     overwrite: bool,
     dry_run: bool,
+    workers: int = 1,
 ) -> MigrateOptions:
     return MigrateOptions(
         experiment=experiment or None,
@@ -123,6 +124,7 @@ def build_options(
         max_artifact_bytes=parse_size(max_artifact_size),
         overwrite=overwrite,
         dry_run=dry_run,
+        workers=workers,
     )
 
 
@@ -259,6 +261,7 @@ def migrate(
     system_metrics: Annotated[str, typer.Option("--system-metrics")] = "false",
     max_artifact_size: Annotated[str, typer.Option("--max-artifact-size")] = "100MB",
     overwrite: Annotated[bool, typer.Option("--overwrite", help="Replace existing runs.")] = False,
+    workers: Annotated[int, typer.Option("--workers", help="Runs to migrate in parallel.")] = 1,
     tracking_uri: TrackingUriOption = "",
     as_json: JsonOption = False,
     verbose: VerboseOption = False,
@@ -266,7 +269,14 @@ def migrate(
     """Migrate a W&B project into an MLflow experiment."""
     setup_logging(verbose)
     options = build_options(
-        experiment, artifacts, files, system_metrics, max_artifact_size, overwrite, dry_run=False
+        experiment,
+        artifacts,
+        files,
+        system_metrics,
+        max_artifact_size,
+        overwrite,
+        dry_run=False,
+        workers=workers,
     )
     source = WandbProject.connect(entity, project)
     migrator = Migrator(build_client(tracking_uri), options)

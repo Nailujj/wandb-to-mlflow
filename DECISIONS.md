@@ -247,3 +247,22 @@ act on a project named with the `w2m-selftest-` prefix this tool creates.
 **Q: `demo` defaults to 2,000 throughput steps, not 20,000.**
 A: `demo` is the thing a stranger runs first; it should finish. `--steps 20000`
 gets the full case, and tier 3 uses the full seeder.
+
+## M9 — parallelism
+
+**Q: What actually races when `--workers > 1`?**
+A: Sweep-parent creation. Several children of one sweep migrate at once and
+would each create their own parent run, silently splitting a sweep into N
+sweeps. The state lock is therefore held **across** the check-and-create, not
+just around the dictionary write.
+
+**Q: Does parallelism change the output?**
+A: No, and that is tested: reports are collected in submission order, so a
+migration's output does not depend on which worker finished first. The serial
+and parallel migrations of the full fixture set are asserted identical, and
+parallel re-runs are asserted still idempotent.
+
+**Q: Default `--workers`?**
+A: 1. Parallel writes to a shared tracking server are a decision the operator
+should make knowingly — some servers rate-limit, and the file store is not
+designed for it. The option is there for people migrating thousands of runs.

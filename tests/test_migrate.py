@@ -593,3 +593,64 @@ def test_the_same_migration_works_against_a_sqlite_backend(tmp_path: Path) -> No
     nested = get_run(client, result, "r01-nested")
     assert nested.data.params["optimizer.sched.warmup.steps"] == "100"
     assert len(metric_history(client, nested.info.run_id, "loss")) == 3
+
+
+# --------------------------------------------------------------------------- #
+# --workers
+# --------------------------------------------------------------------------- #
+
+
+def test_parallel_migration_produces_the_same_result_as_serial(tmp_path: Path) -> None:
+    serial_client = MlflowClient(tracking_uri=f"file://{tmp_path / 'serial'}")
+    parallel_client = MlflowClient(tracking_uri=f"file://{tmp_path / 'parallel'}")
+    runs = fixtures.all_runs()
+
+    serial = Migrator(serial_client, MigrateOptions(experiment="w")).migrate_project(
+        fixtures.FakeProject(run_list=runs)
+    )
+    parallel = Migrator(parallel_client, MigrateOptions(experiment="w", workers=8)).migrate_project(
+        fixtures.FakeProject(run_list=runs)
+    )
+
+    assert parallel.failures == []
+    assert [r.wandb_run_id for r in parallel.reports] == [r.wandb_run_id for r in serial.reports]
+    for a, b in zip(serial.reports, parallel.reports, strict=True):
+        assert a.metric_point_counts == b.metric_point_counts
+        assert a.param_count == b.param_count
+        assert a.dropped.as_dict() == b.dropped.as_dict()
+        assert a.status == b.status
+
+
+def test_parallel_sweep_children_share_exactly_one_parent(client: MlflowClient) -> None:
+    """The race this guards: three children each creating their own parent."""
+    children = [
+        fixtures.FakeRun(
+            id=f"sweep-{i}", name=f"c{i}", sweep_id="one-sweep", rows=[{"_step": 0, "loss": 1.0}]
+        )
+        for i in range(24)
+    ]
+    result, _ = migrate(client, children, workers=8)
+    assert result.failures == []
+    parents = {
+        get_run(client, result, f"sweep-{i}").data.tags["mlflow.parentRunId"] for i in range(24)
+    }
+    assert len(parents) == 1
+
+
+def test_parallel_migration_is_still_idempotent(client: MlflowClient) -> None:
+    runs = fixtures.all_runs()
+    first, _ = migrate(client, runs, workers=8)
+    second, _ = migrate(client, runs, workers=8)
+    assert all(r.skipped for r in second.reports)
+    assert {r.mlflow_run_id for r in first.reports} == {r.mlflow_run_id for r in second.reports}
+
+
+def test_a_failure_in_one_worker_does_not_stop_the_others(client: MlflowClient) -> None:
+    class Exploding(fixtures.FakeRun):
+        def history(self) -> Any:
+            raise RuntimeError("worker blew up")
+
+    runs = [*fixtures.all_runs(), Exploding(id="boom")]
+    result, _ = migrate(client, runs, workers=8)
+    assert len(result.failures) == 1
+    assert len(result.migrated) == len(fixtures.all_runs())
