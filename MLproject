@@ -1,0 +1,36 @@
+name: wandb_to_mlflow
+
+python_env: python_env.yaml
+
+entry_points:
+  migrate:
+    parameters:
+      entity: string
+      project: string
+      experiment: {type: string, default: ""}
+      artifacts: {type: string, default: "false"}
+    command: "python -m wandb_to_mlflow migrate --entity {entity} --project {project} --experiment '{experiment}' --artifacts {artifacts}"
+
+  plan:
+    parameters:
+      entity: string
+      project: string
+      experiment: {type: string, default: ""}
+    command: "python -m wandb_to_mlflow plan --entity {entity} --project {project} --experiment '{experiment}'"
+
+  seed:
+    parameters:
+      entity: string
+      project: {type: string, default: ""}
+    command: "python -m wandb_to_mlflow seed --entity {entity} --project '{project}' --yes"
+
+  verify:
+    parameters:
+      manifest: path
+      experiment: string
+    command: "python -m wandb_to_mlflow verify --manifest {manifest} --experiment {experiment}"
+
+  demo:
+    parameters:
+      entity: string
+    command: "python -m wandb_to_mlflow demo --entity {entity} --yes"

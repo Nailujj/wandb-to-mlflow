@@ -1,0 +1,16 @@
+# Environment for `mlflow run .`.
+#
+# Only the runtime dependencies appear here; the package itself is installed
+# from the project directory, which is what `mlflow run` makes the working
+# directory before running an entry point.
+python: "3.11"
+build_dependencies:
+  - pip
+  - setuptools
+  - wheel
+dependencies:
+  - wandb
+  - mlflow>=2.9
+  - typer
+  - tenacity
+  - "."

@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python ${{ matrix.python-version }}
+      - run: uv pip install -e ".[dev]"
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy --strict src/
+      # Tiers 1 and 2 only. Tier 3 needs real W&B credentials and is opt-in.
+      - run: uv run pytest -q --cov=wandb_to_mlflow --cov-branch --cov-report=term-missing
+      - name: coerce.py must stay at 100% branch coverage
+        run: uv run pytest tests/test_coerce.py --cov=wandb_to_mlflow.coerce --cov-branch --cov-fail-under=100 -q

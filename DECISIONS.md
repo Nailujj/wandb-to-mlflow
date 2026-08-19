@@ -266,3 +266,38 @@ parallel re-runs are asserted still idempotent.
 A: 1. Parallel writes to a shared tracking server are a decision the operator
 should make knowingly — some servers rate-limit, and the file store is not
 designed for it. The option is there for people migrating thousands of runs.
+
+## M10 — MLflow Project
+
+**Q: `python_env.yaml` pins `python: "3.11"` while `requires-python` is `>=3.10`.**
+A: `python_env` needs a concrete version MLflow can provision; the floor stays
+3.10 and a test asserts the pinned version satisfies it. Verified for real:
+`mlflow run . -e verify` under the default env manager built Python 3.11 from
+source, created a fresh venv from this file, installed the package, and exited 0.
+
+**Q: Is the ambient-run trap actually avoided in a real `mlflow run`, not just
+in the unit test?**
+A: Checked directly after a real `mlflow run . -e verify`: the entry-point runs
+sit in `Default` with their own two params, zero metrics and zero children,
+while the 20 migrated runs plus one sweep parent sit untouched in the target
+experiment.
+
+**Q: `tests/test_mlproject.py` imports `yaml`, which is not in the fixed
+dependency list.**
+A: It arrives with MLflow, which is a runtime dependency, so nothing new is
+installed. Not added to `pyproject.toml` — a test asserts the declared
+dependency sets are exactly the four runtime and four dev packages the spec
+fixes, so an accidental addition fails the build.
+
+**Q: `mlflow run . -e demo` is the headline gate but needs real W&B credentials.**
+A: Every other entry point is verified end to end here. `demo` is verified in
+two halves: its seed step is faked while its migrate and verify steps run for
+real in a tier-2 test, and the whole loop against live services is the tier-3
+`test_the_whole_loop`. Stated plainly rather than claimed as run.
+
+## M11 — docs
+
+**Q: What goes above the fold in the README?**
+A: The "not migrated" table, before installation instructions. Someone deciding
+whether to cancel a W&B subscription needs to know what they are about to lose
+before they need to know how to `pip install`.
