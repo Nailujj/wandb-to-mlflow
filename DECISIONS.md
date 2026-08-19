@@ -131,3 +131,33 @@ tried first and gave a false positive on this module's own docstring.
 
 **Q: The `--overwrite` option exists in `MigrateOptions` but is unused so far.**
 A: It belongs to idempotency (M5) and is wired there, not guessed at now.
+
+## M5 — idempotency and resume
+
+**Q: Where does resume state live — a local journal file or the server?**
+A: The server. A local journal is one `rm -rf` away from turning a resume into a
+duplication, and it cannot see runs a colleague migrated from another machine.
+The idempotency key is the `wandb.run_id` tag; `wandb.migration_complete` is
+written **last**, so a run carrying the first tag but not the second is
+provably half-written and gets replaced rather than trusted.
+
+**Q: How is a half-written run distinguished from a complete one, given MLflow
+has no transactions?**
+A: Write-ordering. `create_run` → params → metrics → artifacts →
+`set_terminated` → completion marker. Any interruption leaves the marker absent.
+The cost is one extra tag write per run.
+
+**Q: What if a future mapping change makes already-migrated runs wrong?**
+A: `wandb.migration_version` records the mapping version that produced each run.
+Bumping `MAPPING_VERSION` makes older runs count as not-reusable, so they are
+re-migrated instead of being silently left stale.
+
+**Q: Does `--overwrite` hard-delete?**
+A: No, MLflow's soft delete. The run leaves the active view so it cannot appear
+as a duplicate, but stays restorable. A tool whose entire purpose is not losing
+data should not be the thing that loses it.
+
+**Q: Building the state index — one query per run, or one paginated scan?**
+A: One paginated scan of the target experiment. A 4,000-run project would
+otherwise pay 4,000 round trips just to discover it has nothing to do. Asserted
+by a test that counts `search_runs` calls.

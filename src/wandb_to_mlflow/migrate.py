@@ -39,6 +39,7 @@ from wandb_to_mlflow.coerce import (
 )
 from wandb_to_mlflow.limits import Limits, default_limits
 from wandb_to_mlflow.source import SourceArtifact, SourceProject, SourceRun
+from wandb_to_mlflow.state import RUN_ID_TAG, SWEEP_PARENT_TAG, MigrationState
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ class RunReport:
     files_migrated: int = 0
     parent_run_id: str | None = None
     skipped: bool = False
+    skip_reason: str | None = None
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -119,6 +121,7 @@ class RunReport:
             "artifacts_skipped": self.artifacts_skipped,
             "reference_artifacts": self.reference_artifacts,
             "skipped": self.skipped,
+            "skip_reason": self.skip_reason,
             "error": self.error,
         }
 
@@ -132,6 +135,14 @@ class MigrationResult:
     @property
     def failures(self) -> list[RunReport]:
         return [r for r in self.reports if r.error is not None]
+
+    @property
+    def migrated(self) -> list[RunReport]:
+        return [r for r in self.reports if r.error is None and not r.skipped]
+
+    @property
+    def skipped(self) -> list[RunReport]:
+        return [r for r in self.reports if r.skipped]
 
     @property
     def ok(self) -> bool:
@@ -204,7 +215,7 @@ class Migrator:
         self.client = client
         self.options = options or MigrateOptions()
         self.limits = limits or default_limits()
-        self._sweep_parents: dict[str, str] = {}
+        self.state: MigrationState | None = None
 
     # -- experiment ------------------------------------------------------- #
 
@@ -224,7 +235,12 @@ class Migrator:
             result.experiment_id = str(experiment.experiment_id) if experiment else None
         else:
             result.experiment_id = self.ensure_experiment(name)
-        self._sweep_parents = {}
+
+        if result.experiment_id is not None:
+            self.state = MigrationState(self.client, result.experiment_id)
+            self.state.load()
+        else:
+            self.state = None
 
         for run in source.runs():
             try:
@@ -239,6 +255,16 @@ class Migrator:
     def migrate_run(self, run: SourceRun, experiment_id: str | None) -> RunReport:
         report = RunReport(wandb_run_id=run.id, wandb_name=run.name)
         report.status = STATE_TO_STATUS.get(run.state, DEFAULT_STATUS)
+
+        existing = self.state.lookup(run.id) if self.state else None
+        if existing is not None and not self.options.overwrite and existing.reusable:
+            # Already migrated in full under the current mapping. Re-reading its
+            # history from W&B would cost real time and change nothing.
+            report.mlflow_run_id = existing.mlflow_run_id
+            report.skipped = True
+            report.skip_reason = "already migrated"
+            logger.info("skipping W&B run %s: already migrated", run.id)
+            return report
 
         start_time = parse_timestamp(run.created_at)
         points, last_ts, metric_renames = self._collect_metrics(run, report)
@@ -255,6 +281,13 @@ class Migrator:
             return report
 
         assert experiment_id is not None  # dry_run is the only path with no experiment
+        if existing is not None:
+            # Either --overwrite, or a run interrupted before it was marked
+            # complete. Both mean the existing run is not to be trusted.
+            assert self.state is not None
+            self.state.discard(run.id, existing.mlflow_run_id)
+            report.skip_reason = "overwritten" if self.options.overwrite else "resumed"
+
         parent_run_id = self._sweep_parent(run, experiment_id)
         report.parent_run_id = parent_run_id
 
@@ -277,6 +310,10 @@ class Migrator:
 
         end_time = self._end_time(run, start_time, last_ts, report)
         self.client.set_terminated(run_id, status=report.status, end_time=end_time)
+        # Last write, deliberately: a run without this marker is a half-written
+        # run, and a resumed migration replaces it rather than trusting it.
+        if self.state is not None:
+            self.state.mark_complete(run.id, run_id)
         return report
 
     # -- metrics ---------------------------------------------------------- #
@@ -394,7 +431,7 @@ class Migrator:
         self, run: SourceRun, report: RunReport, parent_run_id: str | None
     ) -> dict[str, str]:
         tags: dict[str, str] = {
-            "wandb.run_id": run.id,
+            RUN_ID_TAG: run.id,
             "wandb.state": run.state,
             "wandb.entity": run.entity,
             "wandb.project": run.project,
@@ -443,19 +480,16 @@ class Migrator:
         sweep_id = run.sweep_id
         if not sweep_id:
             return None
-        cached = self._sweep_parents.get(sweep_id)
-        if cached:
-            return cached
-        existing = self._find_run_by_tag(experiment_id, "wandb.sweep_parent_id", sweep_id)
-        if existing:
-            self._sweep_parents[sweep_id] = existing
-            return existing
+        if self.state is not None:
+            cached = self.state.sweep_parent(sweep_id)
+            if cached:
+                return cached
         parent = self.client.create_run(
             experiment_id=experiment_id,
             start_time=parse_timestamp(run.created_at),
             tags={
                 "wandb.sweep_id": sweep_id,
-                "wandb.sweep_parent_id": sweep_id,
+                SWEEP_PARENT_TAG: sweep_id,
                 "wandb.is_sweep_parent": "true",
                 "wandb.entity": run.entity,
                 "wandb.project": run.project,
@@ -464,16 +498,9 @@ class Migrator:
         )
         parent_id = str(parent.info.run_id)
         self.client.set_terminated(parent_id, status="FINISHED")
-        self._sweep_parents[sweep_id] = parent_id
+        if self.state is not None:
+            self.state.remember_sweep_parent(sweep_id, parent_id)
         return parent_id
-
-    def _find_run_by_tag(self, experiment_id: str, key: str, value: str) -> str | None:
-        found = self.client.search_runs(
-            experiment_ids=[experiment_id],
-            filter_string=f"tags.`{key}` = '{value}'",
-            max_results=1,
-        )
-        return str(found[0].info.run_id) if found else None
 
     # -- files and artifacts ---------------------------------------------- #
 

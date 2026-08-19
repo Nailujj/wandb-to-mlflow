@@ -538,10 +538,14 @@ def test_system_metrics_are_opt_in_and_prefixed(client: MlflowClient) -> None:
         {"_timestamp": fixtures.BASE_TS, "gpu.0.memory": 40.0},
         {"_timestamp": fixtures.BASE_TS + 5, "gpu.0.memory": 55.0},
     ]
-    off, _ = migrate(client, [source])
+    off = Migrator(client, MigrateOptions(experiment="off")).migrate_project(
+        fixtures.FakeProject(run_list=[source])
+    )
     assert "system.gpu.0.memory" not in get_run(client, off, "r04-bools").data.metrics
 
-    on, _ = migrate(client, [source], include_system_metrics=True)
+    on = Migrator(
+        client, MigrateOptions(experiment="on", include_system_metrics=True)
+    ).migrate_project(fixtures.FakeProject(run_list=[source]))
     run = get_run(client, on, "r04-bools")
     assert len(metric_history(client, run.info.run_id, "system.gpu.0.memory")) == 2
 
