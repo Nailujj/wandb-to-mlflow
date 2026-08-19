@@ -189,3 +189,26 @@ sweep child verified as having an "unexpected parent".**
 A: `RunReport` now carries `wandb_sweep_id`, populated during planning before
 any parent run exists. Worth recording as evidence that verify earns its keep:
 it caught a real defect in its own first run.
+
+## M7 — the CLI
+
+**Q: `--artifacts` reads naturally as a bare flag, but the spec's `MLproject`
+substitutes `--artifacts {artifacts}` with a default of `"false"`, which a flag
+cannot accept.**
+A: `--artifacts`, `--files` and `--system-metrics` take an explicit value
+(`--artifacts true`). One spelling that works from both a shell and an MLflow
+entry point beats two spellings that each work in one place. A value that is
+neither truthy nor falsy is rejected, never guessed.
+
+**Q: `--max-artifact-size` — raw bytes or human sizes?**
+A: Both. `parse_size` accepts `512`, `20MB`, `1.5GiB`. Nobody should have to
+type `104857600`.
+
+**Q: `plan` "writes nothing", but MLflow's file store creates a `Default`
+experiment the moment a client touches it.**
+A: That is MLflow initialising its own store, not the tool writing. The test
+asserts the precise thing that matters: after `plan`, the target experiment does
+not exist and no run exists anywhere.
+
+**Q: How is "no `print()` in library code" enforced?**
+A: An AST test over every module except `cli.py` and `__main__.py`.
