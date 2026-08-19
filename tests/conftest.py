@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 
-class NetworkUseInTest(RuntimeError):
+class NetworkUseInTestError(RuntimeError):
     """Raised when a non-e2e test tries to open a socket."""
 
 
@@ -25,7 +25,7 @@ def no_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) 
         return
 
     def guard(*args: Any, **kwargs: Any) -> None:
-        raise NetworkUseInTest(
+        raise NetworkUseInTestError(
             "tiers 1 and 2 must not touch the network; mark the test with @pytest.mark.e2e"
         )
 

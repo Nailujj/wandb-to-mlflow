@@ -77,3 +77,25 @@ asserted in prose?**
 A: An autouse fixture in `tests/conftest.py` patches `socket.connect` to raise
 for every test not marked `e2e`. A regression that introduces a live call fails
 immediately instead of silently making CI slow and flaky.
+
+## M3 — source protocol and fixtures
+
+**Q: The spec's `SourceRun` protocol has no `entity`/`project`. The migrator
+needs both to write the `wandb.entity`/`wandb.project` tags.**
+A: Added to the protocol. Also added `system_metrics()` alongside `history()`,
+because system metrics come from a different W&B stream (`stream="events"`) and
+folding them into `history()` would make the opt-in flag unimplementable.
+
+**Q: How does the migrator honour `--max-artifact-size` without downloading?**
+A: `SourceArtifact` exposes `size` and `is_reference` as plain attributes,
+populated from the artifact manifest. `is_reference` is derived from whether any
+manifest entry carries a `ref`, since W&B has no single flag for it.
+
+**Q: W&B property access raises on partially-populated records.**
+A: All adapter attribute reads go through `_safe()`, which logs at debug and
+falls back. A migration must not die because one run has no `job_type`.
+
+**Q: `all_runs()` includes the throughput case at 200 steps, not 20,000.**
+A: Tier 2 runs on every commit and must stay under a few seconds. The full
+20,000-step fixture exists and is exercised by its own test; the seeder logs the
+real 20,000 for tier 3.
