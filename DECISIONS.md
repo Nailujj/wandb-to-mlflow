@@ -212,3 +212,38 @@ not exist and no run exists anywhere.
 
 **Q: How is "no `print()` in library code" enforced?**
 A: An AST test over every module except `cli.py` and `__main__.py`.
+
+## M8 — the seeder
+
+**Q: The spec wants a seeded run in W&B's `crashed` state. `crashed` is what W&B
+records when a run's heartbeat stops — it cannot be produced deterministically
+through the SDK (it needs a killed process and a multi-minute heartbeat timeout).**
+A: Both status runs are seeded with non-zero exit codes, which W&B records as
+`failed`, and the manifest records `FAILED` for both. The `crashed → FAILED`
+half of the mapping is covered by a tier-2 fixture and a unit test on
+`STATE_TO_STATUS` instead. Stated here rather than quietly seeding two identical
+runs and calling the case covered.
+
+**Q: The manifest must come from what was actually logged, not from a second W&B
+query — but the seeder can only know what it handed to `wandb.log`.**
+A: That is exactly what it uses. `build_specs()` is pure data; `expected_for()`
+counts over those payloads with plain arithmetic; neither runs the migrator.
+Key sanitisation is the one shared piece, because sanitisation *is* the mapping
+contract. A test migrates the `SourceRun`s W&B would return for each spec and
+asserts the independently-derived manifest verifies clean — so the seeder's
+arithmetic and the migrator's behaviour are checked against each other offline,
+before a real W&B project is ever created.
+
+**Q: How is a reference artifact seeded without cloud credentials?**
+A: A `file://` reference to a local file. It is a genuine reference artifact —
+W&B stores the URI, not the bytes — and needs no S3 account to set up.
+
+**Q: `seed --cleanup` cannot delete the project itself.**
+A: W&B's public API has no project delete (`Project` exposes no `delete`; `Run`
+does). Cleanup deletes every run and artifact, then tells the user plainly that
+the empty project shell has to go from the web UI. Guarded so it will only ever
+act on a project named with the `w2m-selftest-` prefix this tool creates.
+
+**Q: `demo` defaults to 2,000 throughput steps, not 20,000.**
+A: `demo` is the thing a stranger runs first; it should finish. `--steps 20000`
+gets the full case, and tier 3 uses the full seeder.

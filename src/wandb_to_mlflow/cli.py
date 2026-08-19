@@ -17,6 +17,7 @@ import typer
 from mlflow.tracking import MlflowClient
 
 from wandb_to_mlflow import __version__
+from wandb_to_mlflow import seed as seed_module
 from wandb_to_mlflow.migrate import MigrateOptions, MigrationResult, Migrator
 from wandb_to_mlflow.source import SourceProject, WandbProject
 from wandb_to_mlflow.verify import Manifest, Verifier, format_report, manifest_from_source
@@ -307,6 +308,107 @@ def verify(
     else:
         echo(format_report(report))
     raise typer.Exit(0 if report.ok else 1)
+
+
+@app.command(name="seed")
+def seed_command(
+    entity: EntityOption,
+    project: Annotated[str, typer.Option("--project", "-p", help="Project name to create.")] = "",
+    manifest: Annotated[
+        Path, typer.Option("--manifest", help="Where to write ground truth.")
+    ] = Path("manifest.json"),
+    steps: Annotated[int, typer.Option("--steps", help="Rows for the throughput run.")] = 0,
+    cleanup: Annotated[str, typer.Option("--cleanup", help="Delete a seeded project's runs.")] = "",
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not prompt.")] = False,
+    verbose: VerboseOption = False,
+) -> None:
+    """Create a real W&B project of hostile runs, and the manifest describing them."""
+    setup_logging(verbose)
+    if cleanup:
+        _cleanup(entity, cleanup, yes)
+        return
+
+    project_name = project or seed_module.default_project_name()
+    specs = seed_module.build_specs()
+    echo(seed_module.plan_text(specs, entity, project_name))
+    echo("")
+    if not yes and not typer.confirm("Create this project?", default=False):
+        echo("Nothing was created.")
+        raise typer.Exit(1)
+
+    created, built = seed_module.seed(
+        entity, project_name, manifest_path=manifest, steps=steps or None
+    )
+    echo("")
+    echo(f"Seeded {len(built.runs)} runs into {entity}/{created}")
+    echo(f"Manifest written to {manifest}")
+
+
+def _cleanup(entity: str, project: str, yes: bool) -> None:
+    if not seed_module.is_seeded_project(project):
+        raise typer.BadParameter(
+            f"{project!r} does not look like a seeded project "
+            f"(expected a name starting {seed_module.PROJECT_PREFIX!r}). "
+            "Refusing to delete runs from a project this tool did not create."
+        )
+    echo(f"This will DELETE every run in {entity}/{project}.")
+    if not yes and not typer.confirm("Delete them?", default=False):
+        echo("Nothing was deleted.")
+        raise typer.Exit(1)
+    deleted = seed_module.cleanup(entity, project)
+    echo(f"Deleted {deleted} runs.")
+    echo(
+        "The empty project itself remains: W&B's public API has no project delete. "
+        "Remove it from the web UI if you want it gone."
+    )
+
+
+@app.command()
+def demo(
+    entity: EntityOption,
+    project: Annotated[str, typer.Option("--project", "-p")] = "",
+    experiment: ExperimentOption = "",
+    steps: Annotated[int, typer.Option("--steps")] = 2000,
+    tracking_uri: TrackingUriOption = "",
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not prompt.")] = False,
+    keep: Annotated[bool, typer.Option("--keep", help="Do not delete the seeded project.")] = False,
+    verbose: VerboseOption = False,
+) -> None:
+    """Seed, migrate, verify, and print the URL to look at the result."""
+    setup_logging(verbose)
+    project_name = project or seed_module.default_project_name()
+    specs = seed_module.build_specs()
+    echo(seed_module.plan_text(specs, entity, project_name))
+    echo("")
+    if not yes and not typer.confirm("Run the demo?", default=False):
+        echo("Nothing was created.")
+        raise typer.Exit(1)
+
+    echo("[1/3] seeding W&B ...")
+    manifest_path = Path("manifest.json")
+    created, built = seed_module.seed(
+        entity, project_name, manifest_path=manifest_path, steps=steps or None
+    )
+    experiment_name = experiment or created
+
+    echo("[2/3] migrating ...")
+    client = build_client(tracking_uri)
+    options = MigrateOptions(experiment=experiment_name, include_artifacts=True, include_files=True)
+    result = Migrator(client, options).migrate_project(WandbProject.connect(entity, created))
+    echo(format_migration(result))
+
+    echo("")
+    echo("[3/3] verifying against the manifest ...")
+    report = Verifier(client).verify(built, experiment_name)
+    echo(format_report(report))
+
+    echo("")
+    if not keep:
+        echo(f"Clean up W&B with: wandb-to-mlflow seed --cleanup {created} -e {entity} --yes")
+    echo(f"Now look at it:  mlflow ui --backend-store-uri {tracking_uri or './mlruns'}")
+    echo(f"  experiment:    {experiment_name}")
+    echo("  checklist:     see the UI acceptance section of README.md")
+    raise typer.Exit(0 if (report.ok and result.ok) else 1)
 
 
 @app.command()

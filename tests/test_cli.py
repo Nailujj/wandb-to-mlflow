@@ -335,3 +335,100 @@ def test_library_code_never_prints() -> None:
             ):
                 offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == []
+
+
+# --------------------------------------------------------------------------- #
+# seed safety (spec 6.1)
+# --------------------------------------------------------------------------- #
+
+
+def test_seed_prints_the_plan_and_stops_without_confirmation() -> None:
+    result = runner.invoke(cli.app, ["seed", "-e", "acme"], input="n\n")
+    assert result.exit_code == 1
+    assert "This will CREATE" in result.output
+    assert "Nothing was created." in result.output
+
+
+def test_seed_default_project_name_is_timestamped() -> None:
+    result = runner.invoke(cli.app, ["seed", "-e", "acme"], input="n\n")
+    assert "project: w2m-selftest-" in result.output
+
+
+def test_seed_refuses_to_clean_up_a_project_it_did_not_create() -> None:
+    result = invoke("seed", "-e", "acme", "--cleanup", "production-experiments", "--yes")
+    assert result.exit_code != 0
+    assert "Refusing to delete" in result.output
+
+
+def test_seed_cleanup_asks_before_deleting(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"n": 0}
+    monkeypatch.setattr(
+        cli.seed_module, "cleanup", lambda entity, project: called.__setitem__("n", 1)
+    )
+    result = runner.invoke(
+        cli.app, ["seed", "-e", "acme", "--cleanup", "w2m-selftest-x"], input="n\n"
+    )
+    assert result.exit_code == 1
+    assert called["n"] == 0
+    assert "Nothing was deleted." in result.output
+
+
+def test_seed_cleanup_says_the_project_shell_remains(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli.seed_module, "cleanup", lambda entity, project: 7)
+    result = invoke("seed", "-e", "acme", "--cleanup", "w2m-selftest-x", "--yes")
+    assert result.exit_code == 0
+    assert "Deleted 7 runs." in result.output
+    assert "no project delete" in result.output
+
+
+def test_demo_stops_without_confirmation() -> None:
+    result = runner.invoke(cli.app, ["demo", "-e", "acme"], input="n\n")
+    assert result.exit_code == 1
+    assert "Nothing was created." in result.output
+
+
+def test_demo_runs_the_whole_loop(
+    tracking_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seed is faked; migrate and verify are real."""
+    from tests.test_seed import fake_run_for
+    from wandb_to_mlflow.seed import build_specs, manifest_for
+
+    specs = [s for s in build_specs() if s.key != "throughput"]
+    run_ids = {spec.key: f"demo-{spec.key}" for spec in specs}
+    runs = [fake_run_for(spec, run_ids[spec.key]) for spec in specs]
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.seed_module,
+        "seed",
+        lambda entity, project, manifest_path=None, steps=None: (
+            project,
+            manifest_for(specs, entity, project, run_ids, "sw-seeded"),
+        ),
+    )
+    monkeypatch.setattr(
+        cli.WandbProject,
+        "connect",
+        staticmethod(lambda entity, project, filters=None: fixtures.FakeProject(run_list=runs)),
+    )
+
+    result = invoke(
+        "demo",
+        "-e",
+        "acme",
+        "-p",
+        "w2m-selftest-demo",
+        "--experiment",
+        "demo",
+        "--tracking-uri",
+        tracking_uri,
+        "--yes",
+    )
+    assert result.exit_code == 0, result.output
+    assert "[1/3] seeding" in result.output
+    assert "[2/3] migrating" in result.output
+    assert "[3/3] verifying" in result.output
+    assert "No unexpected loss" in result.output
+    assert "mlflow ui" in result.output
+    assert "seed --cleanup w2m-selftest-demo" in result.output
