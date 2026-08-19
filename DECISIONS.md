@@ -389,3 +389,27 @@ Made enforceable rather than left as a convention:
   deletes, having previously lived only in `cli._cleanup`. A guard a library
   caller can bypass is not a guard, and this is the single code path in the
   package capable of destroying anything.
+
+## Planning must not take the migration's shortcuts
+
+**Q: Live `verify` reported every correctly-migrated run as broken — zero params,
+zero metrics expected — but only against a project that had already been
+migrated.**
+A: Planning reuses `Migrator` with `dry_run=True`, and `migrate_run` skips runs
+already present in the target, returning early to avoid re-reading their history
+from W&B. That shortcut is right for a real migration and wrong for planning:
+`plan` and live `verify` both need the full picture of what a run *should*
+contain. The early return now happens only when actually migrating; planning
+notes `skip_reason` and carries on collecting.
+
+`plan` was equally affected — run against an already-migrated project it
+reported 0 params and 0 metric points. It now reports the full picture plus a
+line saying how many runs are already in MLflow.
+
+**Q: Why did 259 tests miss this?**
+A: They pointed the planner at a different tracking store from the migration, so
+it never saw the existing runs and never took the skip path. The regression test
+deliberately uses the same client for both. `manifest_from_source` also no
+longer defaults to a bare `MlflowClient()` — that silently followed whatever
+`MLFLOW_TRACKING_URI` happened to be, which is how the two stores diverged in
+the first place; the caller now passes the client the verification uses.

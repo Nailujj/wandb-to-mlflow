@@ -235,3 +235,51 @@ def test_planning_a_manifest_writes_nothing(client: MlflowClient) -> None:
     assert client.get_experiment_by_name("planned") is None
     assert len(manifest.runs) == len(fixtures.all_runs())
     assert manifest.wandb == {"entity": "acme", "project": "w2m-selftest"}
+
+
+# --------------------------------------------------------------------------- #
+# planning against an already-migrated experiment
+# --------------------------------------------------------------------------- #
+
+
+def test_live_verify_still_works_after_the_runs_are_already_migrated(
+    client: MlflowClient,
+) -> None:
+    """The regression this exists for.
+
+    Planning shares `Migrator`, which skips already-migrated runs to avoid
+    re-reading their history. Taking that shortcut while *planning* produced a
+    manifest expecting zero params and zero metrics, so live verify reported
+    every correctly-migrated run as broken.
+
+    The earlier tests missed it only because they pointed the planner at a
+    different store from the migration, so it never saw the existing runs. This
+    one deliberately uses the same client for both.
+    """
+    project = fixtures.fake_project()
+    Migrator(client, MigrateOptions(experiment="verified")).migrate_project(project)
+
+    # Same client, same experiment: the planner can now see its own output.
+    manifest = manifest_from_source(project, MigrateOptions(experiment="verified"), client=client)
+    nested = next(r for r in manifest.runs if r.wandb_run_id == "r01-nested")
+    assert nested.expected_param_count > 0
+    assert "loss" in nested.expected_metric_keys
+
+    report = Verifier(client).verify(manifest, "verified")
+    assert report.failures == [], format_report(report)
+
+
+def test_planning_reports_runs_that_are_already_migrated(client: MlflowClient) -> None:
+    project = fixtures.fake_project()
+    Migrator(client, MigrateOptions(experiment="verified")).migrate_project(project)
+    planner = Migrator(client, MigrateOptions(experiment="verified", dry_run=True))
+    result = planner.migrate_project(project)
+
+    assert all(r.skip_reason == "already migrated" for r in result.reports)
+    # ...but still with the full picture, not an empty one.
+    assert all(
+        r.param_count > 0 or r.metric_keys or not r.metric_point_counts for r in result.reports
+    )
+    nested = next(r for r in result.reports if r.wandb_run_id == "r01-nested")
+    assert nested.param_count == 8
+    assert nested.metric_point_counts["loss"] == 3

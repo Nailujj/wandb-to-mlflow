@@ -272,14 +272,22 @@ class Migrator:
         report.status = STATE_TO_STATUS.get(run.state, DEFAULT_STATUS)
 
         existing = self.state.lookup(run.id) if self.state else None
-        if existing is not None and not self.options.overwrite and existing.reusable:
-            # Already migrated in full under the current mapping. Re-reading its
-            # history from W&B would cost real time and change nothing.
+        reusable = existing is not None and not self.options.overwrite and existing.reusable
+        if reusable:
+            assert existing is not None
             report.mlflow_run_id = existing.mlflow_run_id
-            report.skipped = True
             report.skip_reason = "already migrated"
-            logger.info("skipping W&B run %s: already migrated", run.id)
-            return report
+            if not self.options.dry_run:
+                # Already migrated in full under the current mapping. Re-reading
+                # its history from W&B would cost real time and change nothing.
+                report.skipped = True
+                logger.info("skipping W&B run %s: already migrated", run.id)
+                return report
+            # Planning must NOT take that shortcut. `plan` and live `verify`
+            # both need the full picture of what the run *should* contain, and
+            # returning early here would report a migrated run as having no
+            # params and no metrics -- which is what it did until a live run
+            # against an already-migrated project caught it.
 
         start_time = parse_timestamp(run.created_at)
         points, last_ts, metric_renames = self._collect_metrics(run, report)

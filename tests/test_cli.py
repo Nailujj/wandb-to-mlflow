@@ -432,3 +432,31 @@ def test_demo_runs_the_whole_loop(
     assert "No unexpected loss" in result.output
     assert "mlflow ui" in result.output
     assert "seed --cleanup w2m-selftest-demo" in result.output
+
+
+def test_plan_after_a_migration_still_reports_the_full_picture(tracking_uri: str) -> None:
+    """`plan` must not report an already-migrated project as empty work."""
+    invoke(
+        "migrate",
+        "-e",
+        "acme",
+        "-p",
+        "demo",
+        "--experiment",
+        "demo",
+        "--tracking-uri",
+        tracking_uri,
+    )
+    result = invoke("plan", "-e", "acme", "-p", "demo", "--tracking-uri", tracking_uri)
+    assert result.exit_code == 0, result.output
+    assert "Runs to migrate:   20" in result.output
+    assert "Metric points:     0" not in result.output
+    assert "Already in MLflow (would be skipped): 20 of 20 runs" in result.output
+
+
+def test_live_verify_passes_against_a_project_it_just_migrated(tracking_uri: str) -> None:
+    args = ("-e", "acme", "-p", "demo", "--experiment", "demo", "--tracking-uri", tracking_uri)
+    assert invoke("migrate", *args).exit_code == 0
+    result = invoke("verify", *args)
+    assert result.exit_code == 0, result.output
+    assert "No unexpected loss" in result.output

@@ -160,6 +160,14 @@ def format_plan(result: MigrationResult, options: MigrateOptions) -> str:
     else:
         lines.append("Nothing will be dropped: every logged value is a finite scalar.")
 
+    already = [r for r in reports if r.skip_reason == "already migrated"]
+    if already:
+        lines.append("")
+        lines.append(
+            f"Already in MLflow (would be skipped): {len(already)} of {len(reports)} runs. "
+            "Pass --overwrite to replace them."
+        )
+
     renamed = sum(len(r.renamed_keys) for r in reports)
     truncated = sum(len(r.truncated_params) for r in reports)
     sweeps = {r.wandb_sweep_id for r in reports if r.wandb_sweep_id}
@@ -306,13 +314,16 @@ def verify(
     setup_logging(verbose)
     if manifest is None and not (entity and project):
         raise typer.BadParameter("pass either --manifest, or both --entity and --project")
+    client = build_client(tracking_uri)
     if manifest is not None:
         loaded = Manifest.load(manifest)
     else:
         loaded = manifest_from_source(
-            WandbProject.connect(entity, project), MigrateOptions(experiment=experiment)
+            WandbProject.connect(entity, project),
+            MigrateOptions(experiment=experiment),
+            client=client,
         )
-    report = Verifier(build_client(tracking_uri)).verify(loaded, experiment)
+    report = Verifier(client).verify(loaded, experiment)
     if as_json:
         emit_json(report.as_dict())
     else:

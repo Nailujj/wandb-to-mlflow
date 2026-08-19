@@ -149,14 +149,23 @@ class Manifest:
         return {"wandb": self.wandb, "runs": [asdict(run) for run in self.runs]}
 
 
-def manifest_from_source(source: SourceProject, options: MigrateOptions) -> Manifest:
+def manifest_from_source(
+    source: SourceProject, options: MigrateOptions, client: MlflowClient | None = None
+) -> Manifest:
     """Expectations derived by planning a migration without writing anything.
 
     Used by live-mode verification and by ``plan``. Note the limitation called
     out in the module docstring: this compares the migration against the same
     logic that produced it.
+
+    ``client`` should be the same one the verification uses. Defaulting to a
+    fresh ``MlflowClient()`` silently pointed the planner at whatever
+    ``MLFLOW_TRACKING_URI`` happened to be, which is both surprising and, on
+    MLflow 3 with no URI set, an outright error.
     """
-    planner = Migrator(MlflowClient(), MigrateOptions(**{**options.__dict__, "dry_run": True}))
+    planner = Migrator(
+        client or MlflowClient(), MigrateOptions(**{**options.__dict__, "dry_run": True})
+    )
     result = planner.migrate_project(source)
     return Manifest(
         wandb={"entity": source.entity, "project": source.project},
