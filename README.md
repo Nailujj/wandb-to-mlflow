@@ -180,6 +180,12 @@ rather than making CI quietly slow. CI runs tiers 1 and 2 only.
 If `pytest` crashes inside unrelated plugins on your machine (ROS 2 puts its own
 pytest plugins on `PYTHONPATH`, for one), run `env -u PYTHONPATH uv run pytest`.
 
+**If you change the code and `mlflow run .` keeps running the old version**,
+that is MLflow's environment cache, not your edit. It keys the environment on
+`python_env.yaml`, so editing the package does not invalidate it and the stale
+wheel stays installed. Clear it with `rm -rf ~/.mlflow/envs/*`, or iterate with
+`--env-manager local`.
+
 - [MAPPING.md](MAPPING.md) — the contract. Written before the code, and what the
   tests assert against.
 - [DECISIONS.md](DECISIONS.md) — every judgement call made where the spec was

@@ -354,3 +354,16 @@ search space *is* the children's configs and the two cannot disagree.
 **Q: W&B discards empty-dict config values server-side.**
 A: Modelled in `expected_for` rather than removed from the seeded config: the
 seeder really does log it, and W&B really does drop it. Recorded in MAPPING.md.
+
+**Q: `mlflow run .` kept executing pre-fix code after the source had changed.**
+A: MLflow caches the run environment keyed on `python_env.yaml`. Editing the
+package does not invalidate that key, so the stale wheel stayed installed and a
+bug already fixed kept reproducing. Not a repo defect, but an easy hour to lose,
+so it is in the README's development section: `rm -rf ~/.mlflow/envs/*`, or
+iterate with `--env-manager local`.
+
+**Q: `demo` printed `mlflow ui --backend-store-uri ./mlruns` even when the store
+came from `MLFLOW_TRACKING_URI`.**
+A: Fixed to print `client.tracking_uri`, the effective URI. The old message sent
+the reader to an empty store — the one moment the tool has someone's attention
+is a bad one to be wrong about where the data is.

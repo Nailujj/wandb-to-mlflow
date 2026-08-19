@@ -415,7 +415,9 @@ def demo(
     echo("")
     if not keep:
         echo(f"Clean up W&B with: wandb-to-mlflow seed --cleanup {created} -e {entity} --yes")
-    echo(f"Now look at it:  mlflow ui --backend-store-uri {tracking_uri or './mlruns'}")
+    # The effective URI, not the flag: it usually arrives via MLFLOW_TRACKING_URI,
+    # and printing "./mlruns" then sends the reader to an empty store.
+    echo(f"Now look at it:  mlflow ui --backend-store-uri {client.tracking_uri}")
     echo(f"  experiment:    {experiment_name}")
     echo("  checklist:     see the UI acceptance section of README.md")
     raise typer.Exit(0 if (report.ok and result.ok) else 1)
