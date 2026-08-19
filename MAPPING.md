@@ -32,7 +32,7 @@ Legend for **Lossless?**:
 | `run.history()` scalars | metrics with original `step` and `timestamp` | yes for finite scalars | Read with `scan_history()` so no sampling occurs. Step comes from `_step`, timestamp from `_timestamp`. |
 | history `bool` values | dropped, counted | **no** | `bool` is a subclass of `int` in Python; logging it as a metric would silently invent 0/1 data. Counted under `dropped.bool`. |
 | history `NaN` / `±inf` | dropped, counted | **no** | Backend support is inconsistent; not gambled on. Counted under `dropped.nonfinite`. **W&B's API returns these as the JSON strings `"NaN"`, `"Infinity"`, `"-Infinity"`, not as floats** (measured, not assumed). Those three exact spellings are recognised so the drop is filed under the right reason — they are rejected either way, so no number is ever invented from a string. A user who genuinely logged the string `"NaN"` is counted as non-finite rather than as a string; both are dropped. Lowercase `"nan"`/`"inf"` stay classified as strings. |
-| history `None` | dropped, counted | **no** | Counted under `dropped.none`. |
+| history `None` | rejected, **not** counted as loss | n/a | W&B pads sparse rows with explicit nulls for keys that were not logged at that step — a run logging an image every 5th epoch of 25 comes back with 20 nulls. There was never a value, so this is absence, not loss. Tracked separately as padding and reported as such; it never appears in `wandb.dropped` and never fails `verify`. |
 | history strings | dropped, counted | **no** | Scalar-looking strings are **not** parsed into numbers. Counted under `dropped.str`. |
 | history lists | dropped, counted | **no** | Counted under `dropped.list`. |
 | history media / tables (dicts with `_type`) | dropped, counted **by `_type`** | **no — headline this** | `wandb.Image`, `wandb.Table`, `wandb.Audio`, `wandb.Video`, plots and every other rich type are not migrated. Per-type counts land in tag `wandb.dropped_media` and in the run report. |
@@ -138,10 +138,12 @@ Every migrated run carries a machine-readable summary of what was lost, as tag
 `verify`'s expected-loss comparison:
 
 ```json
-{"nonfinite": 3, "bool": 2, "none": 0, "str": 1, "list": 0,
- "media": {"image-file": 2, "table-file": 1},
- "artifacts_skipped": 1, "reference_artifacts": 1}
+{"nonfinite": 3, "bool": 2, "str": 1,
+ "media": 3, "media_types": {"image-file": 2, "table-file": 1}}
 ```
+
+Sparse-row nulls are deliberately absent from this tag — see the `None` row
+above. They are surfaced in the CLI report, labelled as not being data loss.
 
 Only **history** values appear in this tally. Summary values are never counted
 as dropped, because none of them is lost: each becomes either a `final.*` metric

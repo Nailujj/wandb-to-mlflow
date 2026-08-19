@@ -56,9 +56,21 @@ class Drop(str, Enum):
     OTHER = "other"
 
 
+#: A ``None`` in a history row is not lost data -- it is W&B padding a sparse
+#: row for a key that was not logged at that step. Measured: a run logging an
+#: image every 5th epoch of 25 comes back with 20 explicit nulls. Counting those
+#: as loss tells the user they lost 20 values when they lost nothing, which is
+#: why the spec says to reject ``None`` *silently* while every other rejection
+#: is counted and surfaced.
+PADDING_REASONS = frozenset({Drop.NONE})
+
+
 @dataclass
 class DropReport:
-    """A running tally of everything a run lost, so nothing is dropped silently."""
+    """A running tally of everything a run lost, so nothing is dropped silently.
+
+    ``None`` is tracked separately from loss: see :data:`PADDING_REASONS`.
+    """
 
     counts: Counter[str] = field(default_factory=Counter)
     media: Counter[str] = field(default_factory=Counter)
@@ -69,15 +81,29 @@ class DropReport:
             self.media[media_type or "unknown"] += 1
 
     @property
+    def padding(self) -> int:
+        """Sparse-row nulls. Absence of a value, not loss of one."""
+        return sum(self.counts[reason.value] for reason in PADDING_REASONS)
+
+    @property
     def total(self) -> int:
-        return sum(self.counts.values())
+        """How many real values were lost. Excludes sparse padding."""
+        return sum(self.counts.values()) - self.padding
 
     def merge(self, other: DropReport) -> None:
         self.counts.update(other.counts)
         self.media.update(other.media)
 
     def as_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {k: v for k, v in sorted(self.counts.items())}
+        """The loss tally, as written to ``wandb.dropped`` and compared by verify.
+
+        Padding is excluded: this is the answer to "what did I lose", and a key
+        that was simply not logged at a given step is not an answer to that.
+        """
+        padding = {reason.value for reason in PADDING_REASONS}
+        out: dict[str, Any] = {
+            k: v for k, v in sorted(self.counts.items()) if k not in padding and v
+        }
         if self.media:
             out["media_types"] = dict(sorted(self.media.items()))
         return out

@@ -33,8 +33,7 @@ Things that survive but **change shape**:
 - Metric keys illegal in MLflow are **renamed**; the originals are kept in the
   `wandb.renamed_keys` tag. (`train/loss` and `héllo` are already legal and are
   left alone.)
-- `NaN`, `±inf`, `None`, strings, lists and **booleans** are not logged as
-  metrics. Booleans especially: `True` is an `int` in Python, and logging it as
+- `NaN`, `±inf`, strings, lists and **booleans** are not logged as metrics. Booleans especially: `True` is an `int` in Python, and logging it as
   `1.0` would invent data that was never measured.
 
 ### Your W&B data is never touched
@@ -155,8 +154,20 @@ fluent-API call anywhere in the package.
 Automated tests cannot catch a broken step axis. After `demo`, open the UI:
 
 ```bash
-# MLflow 3 requires this to open a ./mlruns file store at all.
-MLFLOW_ALLOW_FILE_STORE=true mlflow ui
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+**Migrate into a SQL backend, not a file store**, if you want to look at the
+result. MLflow 3 puts the filesystem store in maintenance mode: it needs
+`MLFLOW_ALLOW_FILE_STORE=true` even to open, and its own UI then fails against
+it — endpoints the run table depends on return 500 and the experiment shows as
+empty even though every run migrated correctly. Point the migration at SQLite
+from the start:
+
+```bash
+export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+wandb-to-mlflow migrate --entity my-team --project my-project
+mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
 and check by eye:

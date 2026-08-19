@@ -145,10 +145,14 @@ def format_plan(result: MigrationResult, options: MigrateOptions) -> str:
     dropped: dict[str, int] = {}
     media: dict[str, int] = {}
     for report in reports:
-        for reason, count in report.dropped.counts.items():
+        for reason, count in report.dropped.as_dict().items():
+            if reason == "media_types":
+                continue
             dropped[reason] = dropped.get(reason, 0) + count
         for media_type, count in report.dropped.media.items():
             media[media_type] = media.get(media_type, 0) + count
+
+    padding = sum(r.dropped.padding for r in reports)
 
     lines.append("")
     if dropped:
@@ -166,6 +170,13 @@ def format_plan(result: MigrationResult, options: MigrateOptions) -> str:
         lines.append(
             f"Already in MLflow (would be skipped): {len(already)} of {len(reports)} runs. "
             "Pass --overwrite to replace them."
+        )
+
+    if padding:
+        lines.append("")
+        lines.append(
+            f"Sparse-logging nulls: {padding} (NOT data loss -- W&B pads rows for keys "
+            "that were not logged at that step)"
         )
 
     renamed = sum(len(r.renamed_keys) for r in reports)
@@ -204,7 +215,11 @@ def format_migration(result: MigrationResult) -> str:
         lines.append("")
         lines.append("Values dropped (documented in MAPPING.md):")
         for report in dropped_runs:
-            summary = ", ".join(f"{k}={v}" for k, v in sorted(report.dropped.counts.items()))
+            summary = ", ".join(
+                f"{k}={v}"
+                for k, v in sorted(report.dropped.as_dict().items())
+                if k != "media_types"
+            )
             lines.append(f"  {report.wandb_run_id:<24} {summary}")
 
     references = [r for r in result.migrated if r.reference_artifacts]

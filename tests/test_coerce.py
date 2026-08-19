@@ -187,8 +187,37 @@ def test_drop_report_tallies_and_merges() -> None:
 
 def test_drop_report_without_media_omits_media_types() -> None:
     report = DropReport()
-    report.record(Drop.NONE)
-    assert report.as_dict() == {"none": 1}
+    report.record(Drop.STRING)
+    assert report.as_dict() == {"str": 1}
+
+
+def test_sparse_nulls_are_tracked_but_not_reported_as_loss() -> None:
+    """W&B pads sparse rows with nulls; a key not logged at a step is not loss.
+
+    Measured on a real run: 25 rows logging an image every 5th epoch come back
+    with 20 explicit nulls. Reporting those as dropped values would tell the
+    user they lost 20 things they never had.
+    """
+    report = DropReport()
+    for _ in range(20):
+        report.record(Drop.NONE)
+    assert report.padding == 20
+    assert report.total == 0
+    assert report.as_dict() == {}
+
+    report.record(Drop.NONFINITE)
+    assert report.total == 1
+    assert report.as_dict() == {"nonfinite": 1}
+    assert report.padding == 20
+
+
+def test_padding_survives_a_merge() -> None:
+    a, b = DropReport(), DropReport()
+    a.record(Drop.NONE)
+    b.record(Drop.NONE)
+    b.record(Drop.BOOL)
+    a.merge(b)
+    assert (a.padding, a.total, a.as_dict()) == (2, 1, {"bool": 1})
 
 
 def test_drop_report_media_defaults_to_unknown() -> None:

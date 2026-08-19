@@ -413,3 +413,40 @@ deliberately uses the same client for both. `manifest_from_source` also no
 longer defaults to a bare `MlflowClient()` — that silently followed whatever
 `MLFLOW_TRACKING_URI` happened to be, which is how the two stores diverged in
 the first place; the caller now passes the client the verification uses.
+
+## Sparse nulls are not data loss
+
+**Q: A live migration reported `none=20` under "Values dropped" for a run that
+lost nothing.**
+A: W&B pads sparse history rows with explicit nulls for keys not logged at that
+step — measured: a run logging an image every 5th epoch of 25 comes back with
+exactly 20 nulls. There was never a value there, so counting it as loss tells
+the user they lost 20 things they never had. This is why the spec says to reject
+`None` *silently* while every other rejection is "counted and reported".
+
+`None` is now tracked separately as padding: excluded from `DropReport.total`
+and from the `wandb.dropped` tag, so it neither inflates the loss report nor
+affects `verify`. The CLI still shows the count, explicitly labelled as not
+being data loss, because hiding it entirely would be its own kind of dishonesty.
+
+This also explains an apparent non-determinism: the same project migrated twice
+reported different drop counts. The first run happened seconds after the runs
+were created, before W&B had materialised their history, so the nulls were not
+there yet. Nothing about the migration changed — only how much of the history
+W&B had finished writing.
+
+## MLflow 3's UI cannot read a file store
+
+**Q: After a successful migration into `./mlruns`, the MLflow UI showed the
+experiment but no runs, and spammed 500s.**
+A: MLflow 3 has the filesystem store in maintenance mode. It refuses to open
+without `MLFLOW_ALLOW_FILE_STORE=true`, and its UI then calls endpoints the file
+store does not implement (`traces/metrics` returns 500 on every poll). The data
+was migrated correctly the whole time — the `2.0` run-search endpoint returned
+all seven runs with full metrics and params — but the UI was unusable.
+
+The fix is the destination, not the tool: migrate into SQLite. The same
+migration into `sqlite:///mlflow.db` renders correctly, and the tier-2 suite
+already covered that backend precisely because "vendor-neutral" had to mean more
+than "works against the file store". The README now recommends SQLite up front
+instead of the file store, which was bad advice on my part.
