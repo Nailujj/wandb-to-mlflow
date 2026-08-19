@@ -7,7 +7,15 @@ introduces a real W&B or HTTP call fails loudly instead of silently slowing CI.
 
 from __future__ import annotations
 
+import logging
+import os
 import socket
+
+# MLflow 3.x puts the filesystem tracking backend in maintenance mode and refuses
+# to open it unless this is set. Tier 2 uses it deliberately: it is the only
+# backend that needs no server and no network. Set before any mlflow import so
+# the flag is visible when a store is first constructed.
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 from collections.abc import Iterator
 from typing import Any
 
@@ -32,3 +40,8 @@ def no_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(socket.socket, "connect", guard)
     monkeypatch.setattr(socket.socket, "connect_ex", guard)
     yield
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep MLflow quiet; its startup banners drown the test output."""
+    logging.getLogger("mlflow").setLevel(logging.ERROR)

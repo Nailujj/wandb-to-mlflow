@@ -99,3 +99,35 @@ falls back. A migration must not die because one run has no `job_type`.
 A: Tier 2 runs on every commit and must stay under a few seconds. The full
 20,000-step fixture exists and is exercised by its own test; the seeder logs the
 real 20,000 for tier 3.
+
+## M4 — the migrator
+
+**Q: History cannot be sanitised incrementally — a collision is only visible once
+every key is known — but streaming avoids buffering. Which wins?**
+A: Buffering. Points already written under an un-suffixed key cannot be
+retracted, so two distinct W&B series would silently merge into one MLflow
+series. Peak memory is O(points in a single run); the spec's worst case
+(20,000 steps x 5 metrics) is tens of MB. Correctness over footprint here.
+
+**Q: MLflow 3.x refuses to open the filesystem tracking backend without
+`MLFLOW_ALLOW_FILE_STORE=true` ("maintenance mode").**
+A: Tier 2 sets it in `conftest.py`, since the file store is the only backend
+needing no server. Product code is untouched — but the README tells users the
+same flag is needed for `mlflow ui` against `./mlruns` on MLflow 3.
+
+**Q: Does "vendor-neutral" get tested?**
+A: Yes. The full fixture set is migrated against a SQLite backend as well as the
+file store. The SQL store validates keys and lengths more strictly, so it is
+where a sanitisation bug would actually surface.
+
+**Q: Should system metrics contribute to `end_time`?**
+A: No. The events stream can outlive the run's own data. Only the history stream
+defines when the run stopped. Tested.
+
+**Q: How is "no fluent API" enforced?**
+A: A test parses every module's AST and fails on any `mlflow.<fluent>` attribute
+access or `from mlflow import <fluent>`. A prose check over the raw source was
+tried first and gave a false positive on this module's own docstring.
+
+**Q: The `--overwrite` option exists in `MigrateOptions` but is unused so far.**
+A: It belongs to idempotency (M5) and is wired there, not guessed at now.
