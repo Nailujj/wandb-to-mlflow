@@ -301,3 +301,56 @@ real in a tier-2 test, and the whole loop against live services is the tier-3
 A: The "not migrated" table, before installation instructions. Someone deciding
 whether to cancel a W&B subscription needs to know what they are about to lose
 before they need to know how to `pip install`.
+
+## Live self-test findings (tier 3, run against a real W&B account)
+
+The e2e tier immediately justified its existence. Four behaviours of real W&B
+that no amount of offline testing could have surfaced, each measured with a
+targeted probe rather than guessed at:
+
+**1. `wandb.Image` rejects a nested Python list.**
+`AttributeError: 'list' object has no attribute 'ndim'`. The seeder now passes a
+numpy array. numpy is imported inside the seeder's network path only — it is a
+transitive dependency via MLflow, not one this tool declares.
+
+**2. W&B cannot store 4-byte characters in `run.name` or `run.notes`.**
+`Error 3988 (HY000): Conversion from collation utf8mb4_unicode_ci into
+utf8mb3_general_ci impossible`. Probed field by field: accented Latin, Hangul,
+Cyrillic, Greek and CJK are fine everywhere; emoji are fine in **config values
+and tags** but rejected in **name and notes**. The seeder's encoding case now
+puts emoji where W&B accepts them and keeps three-byte scripts in name/notes.
+`tests/fixtures.py` deliberately keeps an emoji-in-name run: the migrator must
+handle one even though W&B cannot currently produce one.
+
+**3. W&B returns non-finite numbers as JSON *strings*.**
+`float("nan")` comes back from `scan_history` as `"NaN"`, `float("inf")` as
+`"Infinity"`. This is a finding about the **tool**, not just the seeder: those
+values were being correctly rejected (spec 5.1 forbids parsing scalar-looking
+strings) but filed under `dropped.str`, so the report told users they had logged
+strings they never logged. `coerce.as_metric` now recognises those three exact
+JSON spellings and files them under `nonfinite`. It changes only the
+*classification* of a rejection — the value is dropped either way, so no number
+is ever invented from a string, and lowercase `"nan"`/`"inf"` stay strings.
+
+**4. W&B auto-populates `run.summary`** with the last logged value of every
+history key, media included, whether or not the user ever wrote a summary. The
+first live self-test reported a dozen "unexpected" `final.*` metrics that were
+all entirely correct — the manifest was wrong, not the migration. Both
+`seed.expected_for` and the offline `fake_run_for` bridge now model this.
+
+Two consequential decisions fell out of these:
+
+**Q: Should summary values count toward `wandb.dropped`?**
+A: No, and this was changed. Every summary value becomes either a `final.*`
+metric or a `summary.*` param — none is lost — so counting them as dropped
+overstated the loss. The tally is now history-only, which is the only place data
+actually goes missing. MAPPING.md says so explicitly.
+
+**Q: The seeded sweep's children carried config the manifest never predicted.**
+A: A W&B sweep injects its own search-space parameters into each child's config.
+The seeder now sweeps over exactly the `lr` values the specs declare, so the
+search space *is* the children's configs and the two cannot disagree.
+
+**Q: W&B discards empty-dict config values server-side.**
+A: Modelled in `expected_for` rather than removed from the seeded config: the
+seeder really does log it, and W&B really does drop it. Recorded in MAPPING.md.

@@ -25,13 +25,13 @@ Legend for **Lossless?**:
 | `run.created_at` | `run.info.start_time` (epoch ms, UTC) | yes | Backdated explicitly on run creation. |
 | last history timestamp (`_timestamp`) | `run.info.end_time` | **approximate** | W&B exposes no true end time via the public API. Falls back to `run.summary._timestamp`, then to `start_time + run.summary._runtime`, then to `start_time`. The chosen source is recorded in tag `wandb.end_time_source`. |
 | `run.state` | run status + tag `wandb.state` | **lossy** | `finished`→`FINISHED`, `crashed`→`FAILED`, `failed`→`FAILED`, `killed`→`KILLED`, `running`→`RUNNING`, anything else→`FINISHED` with the raw string preserved in `wandb.state`. `crashed` and `failed` are distinct in W&B and collapse to `FAILED`. |
-| `run.config` (nested dicts) | params, dotted keys (`optimizer.lr`) | **lossy** | Flattened; lists are JSON-serialised into a single param. Values over `MAX_PARAM_VAL_LENGTH` are truncated (see §2). Keys starting `_` are dropped. |
-| `run.summary`, numeric values | metrics `final.<key>` logged at step 0 | yes | Gives the runs table a sortable final-value column. |
+| `run.config` (nested dicts) | params, dotted keys (`optimizer.lr`) | **lossy** | Flattened; lists are JSON-serialised into a single param. Values over `MAX_PARAM_VAL_LENGTH` are truncated (see §2). Keys starting `_` are dropped. Note that W&B discards empty-dict config values server-side, so they never reach the migrator at all. |
+| `run.summary`, numeric values | metrics `final.<key>` logged at step 0 | yes | Gives the runs table a sortable final-value column. **W&B populates summary itself** with the last value of every logged key, so most `final.*` metrics appear whether or not the user ever wrote a summary. Measured against a live run. |
 | `run.summary`, non-numeric values | params `summary.<key>` | **lossy** | JSON-serialised, truncated at the param limit. |
 | `run.summary`, `_`-prefixed keys | dropped | n/a | W&B internals (`_step`, `_runtime`, `_timestamp`, `_wandb`). |
 | `run.history()` scalars | metrics with original `step` and `timestamp` | yes for finite scalars | Read with `scan_history()` so no sampling occurs. Step comes from `_step`, timestamp from `_timestamp`. |
 | history `bool` values | dropped, counted | **no** | `bool` is a subclass of `int` in Python; logging it as a metric would silently invent 0/1 data. Counted under `dropped.bool`. |
-| history `NaN` / `±inf` | dropped, counted | **no** | Backend support is inconsistent; not gambled on. Counted under `dropped.nonfinite`. |
+| history `NaN` / `±inf` | dropped, counted | **no** | Backend support is inconsistent; not gambled on. Counted under `dropped.nonfinite`. **W&B's API returns these as the JSON strings `"NaN"`, `"Infinity"`, `"-Infinity"`, not as floats** (measured, not assumed). Those three exact spellings are recognised so the drop is filed under the right reason — they are rejected either way, so no number is ever invented from a string. A user who genuinely logged the string `"NaN"` is counted as non-finite rather than as a string; both are dropped. Lowercase `"nan"`/`"inf"` stay classified as strings. |
 | history `None` | dropped, counted | **no** | Counted under `dropped.none`. |
 | history strings | dropped, counted | **no** | Scalar-looking strings are **not** parsed into numbers. Counted under `dropped.str`. |
 | history lists | dropped, counted | **no** | Counted under `dropped.list`. |
@@ -142,6 +142,10 @@ Every migrated run carries a machine-readable summary of what was lost, as tag
  "media": {"image-file": 2, "table-file": 1},
  "artifacts_skipped": 1, "reference_artifacts": 1}
 ```
+
+Only **history** values appear in this tally. Summary values are never counted
+as dropped, because none of them is lost: each becomes either a `final.*` metric
+or a `summary.*` param.
 
 **Expected loss** (matches the manifest / this table) never fails `verify`.
 **Unexpected loss** (a finite scalar that should have migrated and did not)

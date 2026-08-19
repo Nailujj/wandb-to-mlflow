@@ -353,6 +353,14 @@ def sweep_children(sweep_id: str = "sw-abc123") -> list[FakeRun]:
 # 16. unicode and emoji in name and notes
 # --------------------------------------------------------------------------- #
 def run_unicode() -> FakeRun:
+    """Emoji in the run name and notes.
+
+    W&B's backend cannot actually store these (its name/notes columns are
+    utf8mb3, so 4-byte characters are rejected), which is why the seeder puts
+    emoji in config values and tags instead. The case stays here because the
+    migrator must not choke on one -- MLflow accepts them, other sources may
+    produce them, and W&B's limit may change.
+    """
     return FakeRun(
         id="r16-unicode",
         name="ünïcode 🎉 실험",

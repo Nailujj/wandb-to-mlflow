@@ -269,7 +269,10 @@ def test_nonfinite_history_values_are_dropped_and_counted(client: MlflowClient) 
     assert [p.step for p in loss] == [0]
     assert all(math.isfinite(p.value) for p in loss)
     dropped = json.loads(run.data.tags["wandb.dropped"])
-    assert dropped["nonfinite"] == 4  # 3 in history, 1 in summary
+    # History only. The summary NaN is not "dropped": it becomes the param
+    # summary.diverged, so nothing about it is lost.
+    assert dropped["nonfinite"] == 3
+    assert run.data.params["summary.diverged"] == "NaN"
 
 
 def test_media_is_dropped_and_reported_by_type(client: MlflowClient) -> None:

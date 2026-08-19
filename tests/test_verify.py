@@ -155,7 +155,7 @@ def test_detects_a_value_that_should_have_been_dropped_but_was_not(migrated: Any
     report = verify(client, manifest)
     assert not report.ok
     diff = next(d for d in report.failures if d.kind == "dropped_mismatch")
-    assert (diff.expected, diff.actual) == (5, 4)
+    assert (diff.expected, diff.actual) == (5, 3)
 
 
 def test_detects_missing_sweep_parentage(migrated: Any) -> None:

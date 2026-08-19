@@ -249,9 +249,19 @@ def build_specs() -> list[RunSpec]:
         RunSpec(
             key="unicode",
             exercises="encoding",
-            name="ünïcode 🎉 실험",
-            notes="Notes with emoji 🚀 and кириллица.",
-            config={"β": 0.9, "描述": "中文"},
+            # No emoji in `name` or `notes`: W&B's own backend stores those two
+            # columns as utf8mb3 and rejects 4-byte characters outright with
+            # "Error 3988 (HY000): Conversion from collation utf8mb4_unicode_ci
+            # into utf8mb3_general_ci impossible". Config values and tags are
+            # stored differently and take emoji fine, so that is where the
+            # 4-byte case lives. Three-byte scripts (Hangul, Cyrillic, Greek,
+            # CJK) are accepted everywhere and stay in name and notes.
+            # tests/fixtures.py keeps an emoji-in-name run regardless: the
+            # migrator must handle one even though W&B cannot produce one.
+            name="ünïcode 실험",
+            notes="Notes with кириллица and 中文.",
+            config={"β": 0.9, "描述": "中文", "emoji": "🎉🚀"},
+            tags=["🎉"],
             rows=_rows(1, **{"λ/λοιπόν": 0.5}),
         ),
     ]
@@ -304,10 +314,12 @@ def expected_for(
     media_rows = _media_rows(spec)
 
     point_counts: dict[str, int] = {}
+    last_values: dict[str, Any] = {}
     for index, row in enumerate(spec.rows):
         for key, value in row.items():
             if key in INTERNAL_COLUMNS:
                 continue
+            last_values[key] = value
             metric, reason, _ = as_metric(value)
             if metric is None:
                 assert reason is not None
@@ -315,19 +327,34 @@ def expected_for(
                 continue
             point_counts[key] = point_counts.get(key, 0) + 1
         if index < len(media_rows):
-            for media_type in media_rows[index].values():
+            for media_key, media_type in media_rows[index].items():
                 dropped.record(Drop.MEDIA, media_type)
+                last_values[media_key] = {"_type": media_type}
+
+    # W&B writes the last logged value of every history key into run.summary by
+    # itself, media included. Measured against a real run, not assumed -- and
+    # missing it is what made the first live self-test report a dozen
+    # "unexpected" final.* metrics that were entirely correct.
+    summary = {**last_values, **spec.summary}
 
     final_values: dict[str, float] = {}
-    param_keys: set[str] = set(flatten_config(spec.config))
-    for key, value in spec.summary.items():
-        metric, reason, _ = as_metric(value)
+    summary_param_keys: set[str] = set()
+    for key, value in summary.items():
+        metric, _, _ = as_metric(value)
         if metric is None:
-            param_keys.add(f"{SUMMARY_PARAM_PREFIX}{key}")
-            if reason is Drop.NONFINITE:
-                dropped.record(reason)
+            # Not lost: non-numeric summary values become summary.* params.
+            summary_param_keys.add(f"{SUMMARY_PARAM_PREFIX}{key}")
             continue
         final_values[f"{SUMMARY_METRIC_PREFIX}{key}"] = metric
+
+    flat_config = {
+        key: value
+        for key, value in flatten_config(spec.config).items()
+        # W&B discards empty-dict config values server-side, so no param for
+        # them ever reaches MLflow. Measured, like the rest of this function.
+        if value != {}
+    }
+    param_keys: set[str] = set(flat_config) | summary_param_keys
 
     metric_map = sanitise_keys([*point_counts, *final_values], lim)
     param_map = sanitise_keys(param_keys, lim)
@@ -336,7 +363,6 @@ def expected_for(
     counts.update({metric_map[k]: 1 for k in final_values})
 
     expected_params: dict[str, str] = {}
-    flat_config = flatten_config(spec.config)
     for key, value in flat_config.items():
         rendered, was_truncated = as_param(value, lim)
         if not was_truncated and len(rendered) <= 64:
@@ -493,10 +519,19 @@ def _seed_one(wandb: Any, entity: str, project: str, spec: RunSpec, **init: Any)
 
 
 def _media_payloads(wandb: Any, spec: RunSpec) -> list[dict[str, Any]]:
-    """Real ``wandb.Image``/``wandb.Table`` objects for the media case."""
+    """Real ``wandb.Image``/``wandb.Table`` objects for the media case.
+
+    ``wandb.Image`` requires an array with ``.ndim`` -- a nested Python list is
+    rejected with ``AttributeError: 'list' object has no attribute 'ndim'``.
+    numpy is imported here rather than at module scope because it is a
+    transitive dependency (via MLflow), not one this tool declares, and only
+    the seeder's network path needs it.
+    """
     if spec.key != "media":
         return []
-    pixels = [[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 0]]]
+    import numpy as np
+
+    pixels = np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 0]]], dtype=np.uint8)
     table = wandb.Table(columns=["pred", "label"], data=[["a", "b"], ["c", "d"]])
     return [
         {"sample": wandb.Image(pixels), "preds": table},
@@ -540,11 +575,15 @@ def _seed_sweep(
     wandb: Any, entity: str, project: str, specs: list[RunSpec]
 ) -> tuple[str, dict[str, str]]:
     """A real W&B sweep, so the parent/child mapping is exercised end to end."""
+    # The search space *is* the children's configs. A sweep injects its own
+    # parameters into each run's config, so sweeping over anything else would
+    # leave the seeded runs carrying config the manifest never predicted.
+    by_lr = {repr(float(spec.config["lr"])): spec for spec in specs}
     sweep_id = wandb.sweep(
         {
             "method": "grid",
             "metric": {"name": "loss", "goal": "minimize"},
-            "parameters": {"index": {"values": list(range(len(specs)))}},
+            "parameters": {"lr": {"values": [spec.config["lr"] for spec in specs]}},
         },
         entity=entity,
         project=project,
@@ -553,8 +592,7 @@ def _seed_sweep(
 
     def train() -> None:
         run = wandb.init(settings=wandb.Settings(silent=True))
-        index = int(run.config.get("index", 0))
-        spec = specs[index]
+        spec = by_lr[repr(float(run.config["lr"]))]
         run.name = spec.name
         for row in spec.rows:
             run.log(dict(row))

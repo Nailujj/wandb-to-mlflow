@@ -33,6 +33,13 @@ _ALLOWED_KEY_CHARS = re.compile(r"[^/\w.\- ]", re.UNICODE)
 # Path segments MLflow's `path_not_unique` check rejects, and their replacements.
 _BAD_SEGMENTS = {"": "_", ".": "_", "..": "__"}
 
+#: W&B's API returns non-finite numbers as JSON's string spellings, not as
+#: floats -- measured against a real run, where ``float("nan")`` came back as
+#: ``"NaN"`` and ``float("inf")`` as ``"Infinity"``. Recognising them changes
+#: only how a rejection is *classified*; they are rejected either way, so no
+#: number is ever invented from a string. See MAPPING.md.
+NONFINITE_SENTINELS = frozenset({"NaN", "Infinity", "-Infinity"})
+
 _FALLBACK_KEY = "unnamed"
 _COLLISION_HASH_LEN = 6
 
@@ -108,7 +115,12 @@ def as_metric(value: Any) -> tuple[float | None, Drop | None, str | None]:
             return None, Drop.NONFINITE, None
         return as_float, None, None
     if isinstance(value, str):
-        # Deliberately NOT parsed. "3" logged as a string is a string.
+        if value in NONFINITE_SENTINELS:
+            # Rejected either way; this only files it under the honest reason,
+            # so the drop report does not claim the user logged strings.
+            return None, Drop.NONFINITE, None
+        # Deliberately NOT parsed. "3" logged as a string is a string, and
+        # "3.5" is too. Only the exact non-finite spellings above are special.
         return None, Drop.STRING, None
     if isinstance(value, Mapping):
         return None, Drop.MEDIA, media_type_of(value)

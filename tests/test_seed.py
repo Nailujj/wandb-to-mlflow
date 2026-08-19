@@ -9,6 +9,7 @@ run that costs a real W&B project to discover.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from mlflow.tracking import MlflowClient
 
 from tests import fixtures
 from wandb_to_mlflow import seed as seed_module
-from wandb_to_mlflow.migrate import MigrateOptions, Migrator
+from wandb_to_mlflow.migrate import INTERNAL_COLUMNS, MigrateOptions, Migrator
 from wandb_to_mlflow.seed import (
     PROJECT_PREFIX,
     RunSpec,
@@ -34,29 +35,46 @@ from wandb_to_mlflow.verify import Verifier, format_report
 SWEEP_ID = "sw-seeded"
 
 
+def wandb_encode(value: Any) -> Any:
+    """W&B returns non-finite numbers as JSON's string spellings, not as floats.
+
+    Measured against a real run: `float("nan")` comes back as `"NaN"`.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return {float("inf"): "Infinity", float("-inf"): "-Infinity"}.get(value, "NaN")
+    return value
+
+
 def fake_run_for(spec: RunSpec, run_id: str) -> fixtures.FakeRun:
     """The `SourceRun` W&B would return for a seeded `RunSpec`.
 
     This is the bridge between the two halves of the self-test: what the seeder
-    logs, and what the migrator reads.
+    logs, and what the migrator reads. It reproduces two behaviours measured
+    against real W&B, both of which the first live self-test caught:
+
+    - non-finite numbers come back as `"NaN"` / `"Infinity"` / `"-Infinity"`;
+    - `run.summary` is auto-populated with the last value of every logged key,
+      media included, whether or not the user wrote a summary.
     """
     media = seed_module._media_rows(spec)
     rows: list[dict[str, Any]] = []
+    auto_summary: dict[str, Any] = {}
     for index, row in enumerate(spec.rows):
         payload: dict[str, Any] = {
             "_step": index,
             "_timestamp": fixtures.BASE_TS + index,
-            **row,
+            **{k: wandb_encode(v) for k, v in row.items()},
         }
         if index < len(media):
             payload.update({k: {"_type": t} for k, t in media[index].items()})
         rows.append(payload)
+        auto_summary.update({k: v for k, v in payload.items() if k not in INTERNAL_COLUMNS})
     return fixtures.FakeRun(
         id=run_id,
         name=spec.name,
         state=spec.expected_state,
-        config=dict(spec.config),
-        summary=dict(spec.summary),
+        config={k: v for k, v in spec.config.items() if v != {}},  # W&B drops empty dicts
+        summary={**auto_summary, **spec.summary},
         tags=list(spec.tags),
         notes=spec.notes,
         group=spec.group,
@@ -122,8 +140,14 @@ def test_the_manifest_predicts_key_sanitisation(specs: list[RunSpec]) -> None:
     assert "x_y_" in hostile.expected_metric_keys
 
     collision = next(r for r in manifest.runs if r.wandb_run_id == "seeded-key_collision")
-    assert len(collision.expected_metric_keys) == 2
-    assert all(k.startswith("a_b_") for k in collision.expected_metric_keys)
+    history_keys = [k for k in collision.expected_metric_keys if not k.startswith("final.")]
+    assert len(history_keys) == 2
+    assert all(k.startswith("a_b_") for k in history_keys)
+    # W&B's auto-summary means the collision has to be resolved twice over,
+    # once for the history keys and once for the final.* pair.
+    final_keys = [k for k in collision.expected_metric_keys if k.startswith("final.")]
+    assert len(final_keys) == 2
+    assert all(k.startswith("final.a_b_") for k in final_keys)
 
 
 def test_the_manifest_predicts_sweep_parentage(specs: list[RunSpec]) -> None:

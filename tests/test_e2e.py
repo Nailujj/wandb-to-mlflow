@@ -16,6 +16,7 @@ migration against the seeder's manifest, and deletes the runs afterwards.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,14 +41,34 @@ STEPS = int(os.environ.get("W2M_E2E_STEPS", "0")) or None
 
 
 @pytest.fixture(scope="module")
-def seeded() -> tuple[str, object]:
+def seeded() -> Iterator[tuple[str, object]]:
+    """Seed a real project, and clean it up even if seeding dies partway.
+
+    Learned the hard way: a seeding failure mid-fixture leaves an orphaned
+    project behind, because a plain teardown after `yield` never runs.
+    """
     if not ENTITY:
         pytest.skip("set W2M_E2E_ENTITY to the W&B entity to seed into")
     project = default_project_name()
-    created, manifest = seed(ENTITY, project, steps=STEPS)
-    yield created, manifest
-    if os.environ.get("W2M_E2E_KEEP") != "1":
-        cleanup(ENTITY, created)
+    keep = os.environ.get("W2M_E2E_KEEP") == "1"
+    try:
+        created, manifest = seed(ENTITY, project, steps=STEPS)
+    except BaseException:
+        if not keep:
+            _cleanup_quietly(project)
+        raise
+    try:
+        yield created, manifest
+    finally:
+        if not keep:
+            _cleanup_quietly(created)
+
+
+def _cleanup_quietly(project: str) -> None:
+    try:
+        cleanup(ENTITY, project)
+    except Exception as exc:  # cleanup failing must not mask the real failure
+        print(f"could not clean up {ENTITY}/{project}: {exc}")
 
 
 def test_the_whole_loop(seeded: tuple[str, object], tmp_path: Path) -> None:

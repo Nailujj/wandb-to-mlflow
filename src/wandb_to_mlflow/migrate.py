@@ -28,7 +28,6 @@ from mlflow.entities import Metric, Param
 from mlflow.tracking import MlflowClient
 
 from wandb_to_mlflow.coerce import (
-    Drop,
     DropReport,
     as_metric,
     as_param,
@@ -395,15 +394,23 @@ class Migrator:
 
         This is what makes the MLflow runs table sortable by final accuracy,
         which is the first thing anyone looks for after a migration.
+
+        Nothing here is counted as dropped: every summary value becomes either a
+        ``final.*`` metric or a ``summary.*`` param, so none of them is lost.
+        The ``wandb.dropped`` tally is about history values that could not become
+        metrics, which is the only place data actually goes missing.
+
+        Note that W&B populates summary itself with the last value of every
+        logged key, so most ``final.*`` metrics appear without the user having
+        written a summary at all.
         """
+        del report  # summary values are never dropped; see above
         out: list[tuple[str, float, int, int]] = []
         for key, value in run.summary.items():
             if str(key).startswith("_"):
                 continue
-            metric, reason, media_type = as_metric(value)
+            metric, _, _ = as_metric(value)
             if metric is None:
-                if reason in (Drop.NONFINITE, Drop.MEDIA):
-                    report.dropped.record(reason, media_type)
                 continue
             out.append((f"{SUMMARY_METRIC_PREFIX}{key}", metric, 0, start_ms))
         return out, {}

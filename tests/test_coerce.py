@@ -13,6 +13,7 @@ import pytest
 from mlflow.utils.validation import _validate_metric_name, _validate_param_name
 
 from wandb_to_mlflow.coerce import (
+    NONFINITE_SENTINELS,
     TRUNCATION_MARKER,
     Drop,
     DropReport,
@@ -96,12 +97,34 @@ def test_none_rejected() -> None:
     assert as_metric(None) == (None, Drop.NONE, None)
 
 
-@pytest.mark.parametrize("value", ["3", "3.5", "", "loss", "nan", "inf"])
+@pytest.mark.parametrize("value", ["3", "3.5", "", "loss", "nan", "inf", "-infinity"])
 def test_strings_are_never_parsed(value: str) -> None:
-    """A scalar-looking string is still a string. Parsing it would fabricate data."""
+    """A scalar-looking string is still a string. Parsing it would fabricate data.
+
+    The lowercase spellings stay here deliberately: only JSON's exact
+    capitalisation is treated as a non-finite sentinel.
+    """
     metric, reason, _ = as_metric(value)
     assert metric is None
     assert reason is Drop.STRING
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_wandb_nonfinite_sentinels_are_classified_as_nonfinite(value: str) -> None:
+    """W&B returns non-finite numbers as these strings, measured against a real run.
+
+    They are rejected either way -- this only files the rejection under the
+    honest reason, so the drop report does not claim the user logged strings.
+    """
+    metric, reason, _ = as_metric(value)
+    assert metric is None
+    assert reason is Drop.NONFINITE
+
+
+def test_the_sentinels_still_never_become_metrics() -> None:
+    """Recognising a sentinel must not become a licence to parse it."""
+    for value in NONFINITE_SENTINELS:
+        assert not is_metric_value(value)
 
 
 @pytest.mark.parametrize("value", [[1, 2], (1, 2), {1, 2}])
