@@ -161,3 +161,31 @@ data should not be the thing that loses it.
 A: One paginated scan of the target experiment. A 4,000-run project would
 otherwise pay 4,000 round trips just to discover it has nothing to do. Asserted
 by a test that counts `search_runs` calls.
+
+## M6 — verification
+
+**Q: What exactly separates expected from unexpected loss?**
+A: `expected_dropped` in the manifest, compared **in both directions**. Dropping
+more than the manifest says is unexpected loss. Dropping *less* is worse than it
+sounds: it means a value the mapping requires be rejected — a NaN, a bool — got
+through and is now fabricated data sitting in someone's metric chart. Both fail;
+an exact match is reported as informational.
+
+**Q: Should a metric present in MLflow but absent from the manifest fail?**
+A: Yes. Fabricated series are as damaging as missing ones, and this is precisely
+where a regression in the `bool`-is-`int` rule would surface. Metric key sets are
+compared for equality, not containment.
+
+**Q: Live mode compares against expectations derived from the same source API
+the migration read. Doesn't that only prove self-consistency?**
+A: Yes, and that limitation is stated in the module docstring. It is still the
+only thing available to a user migrating real data, and it does catch write-side
+failures (dropped batches, truncated series, wrong statuses). The manifest mode
+exists because ground truth recorded at seed time is the only way to test the
+read side, and that is what the self-test uses.
+
+**Q: A verify bug found during M6 — planning did not know about sweeps, so every
+sweep child verified as having an "unexpected parent".**
+A: `RunReport` now carries `wandb_sweep_id`, populated during planning before
+any parent run exists. Worth recording as evidence that verify earns its keep:
+it caught a real defect in its own first run.

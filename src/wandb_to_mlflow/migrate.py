@@ -86,6 +86,7 @@ class RunReport:
 
     wandb_run_id: str
     wandb_name: str | None = None
+    wandb_sweep_id: str | None = None
     mlflow_run_id: str | None = None
     status: str = DEFAULT_STATUS
     param_count: int = 0
@@ -109,6 +110,7 @@ class RunReport:
         return {
             "wandb_run_id": self.wandb_run_id,
             "wandb_name": self.wandb_name,
+            "wandb_sweep_id": self.wandb_sweep_id,
             "mlflow_run_id": self.mlflow_run_id,
             "status": self.status,
             "param_count": self.param_count,
@@ -253,7 +255,7 @@ class Migrator:
     # -- one run ---------------------------------------------------------- #
 
     def migrate_run(self, run: SourceRun, experiment_id: str | None) -> RunReport:
-        report = RunReport(wandb_run_id=run.id, wandb_name=run.name)
+        report = RunReport(wandb_run_id=run.id, wandb_name=run.name, wandb_sweep_id=run.sweep_id)
         report.status = STATE_TO_STATUS.get(run.state, DEFAULT_STATUS)
 
         existing = self.state.lookup(run.id) if self.state else None
