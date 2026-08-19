@@ -1,0 +1,54 @@
+[project]
+name = "wandb-to-mlflow"
+version = "0.1.0"
+description = "Migrate Weights & Biases runs into any MLflow tracking server."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Julian" }]
+dependencies = [
+    "wandb",
+    "mlflow>=2.9",
+    "typer",
+    "tenacity",
+]
+
+[project.scripts]
+wandb-to-mlflow = "wandb_to_mlflow.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wandb_to_mlflow"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "RUF"]
+
+[tool.mypy]
+# No python_version pin: it must match the interpreter mypy runs under, otherwise
+# third-party stubs compiled for a newer syntax (numpy) fail to parse. See DECISIONS.md.
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["wandb.*", "mlflow.*", "tenacity.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: requires real W&B and MLflow services (opt-in)"]
+addopts = "-m 'not e2e'"
+
+[tool.coverage.run]
+branch = true
+source = ["wandb_to_mlflow"]
