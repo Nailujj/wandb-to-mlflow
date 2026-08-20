@@ -121,6 +121,30 @@ an explicit value (`--artifacts true`) rather than being bare flags, because
 `MLproject` entry points substitute parameters positionally and cannot omit a
 flag conditionally.
 
+### `--tracking-uri` does not decide where artifact bytes go
+
+This one surprises people, and it is MLflow's behaviour rather than ours.
+An experiment's artifact root defaults to `./mlruns/<experiment_id>` resolved
+against the **current working directory** — it is not derived from the tracking
+URI. Two tracking databases used from the same directory therefore share one
+artifact tree, keyed by an experiment id each of them assigns independently. The
+artifacts interleave, and deleting an experiment or running `mlflow gc` against
+one database can remove bytes belonging to the other.
+
+So whenever the tracking store is not the default one sitting in this directory,
+say where the bytes go:
+
+```bash
+wandb-to-mlflow migrate -e my-team -p my-project \
+  --tracking-uri sqlite:///mlflow.db \
+  --artifact-root /data/mlflow-artifacts \
+  --files true --artifacts true
+```
+
+MLflow records the artifact location when the experiment is **created** and
+ignores it afterwards, so this cannot relocate an experiment that already
+exists. Passing it for one logs a warning rather than pretending otherwise.
+
 ---
 
 ## It tests itself

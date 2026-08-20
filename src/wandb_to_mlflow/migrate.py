@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -67,6 +68,30 @@ INTERNAL_COLUMNS = frozenset({"_step", "_timestamp", "_runtime", "_wandb"})
 DEFAULT_MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 
 
+def _prefixed(prefix: str, key: str) -> str:
+    """Apply a stream prefix without doubling one W&B already applied.
+
+    The system stream arrives as ``system.cpu``, not ``cpu``, so prefixing
+    unconditionally produced ``system.system.cpu``. Applying it conditionally
+    keeps MAPPING.md's promise that these land under ``system.`` whether or not
+    W&B is the one who put it there.
+    """
+    if not prefix or key.startswith(prefix):
+        return key
+    return f"{prefix}{key}"
+
+
+def _experiment_dirname(name: str) -> str:
+    """A filesystem-safe directory name for an experiment.
+
+    Deliberately not :func:`sanitise_key`: that one targets MLflow's key rules,
+    which permit ``/``. A name like ``team/project`` would silently nest, and
+    ``..`` would climb out of the artifact root entirely.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", name).strip("._-")
+    return cleaned[:120] or "experiment"
+
+
 @dataclass(frozen=True)
 class MigrateOptions:
     """Everything the user can turn on. Bytes-costing features are all opt-in."""
@@ -79,6 +104,14 @@ class MigrateOptions:
     overwrite: bool = False
     dry_run: bool = False
     workers: int = 1
+    #: Where MLflow puts artifact bytes for experiments this tool creates.
+    #: Unset means MLflow's default, which is ``./mlruns/<experiment_id>``
+    #: relative to the *current working directory* -- not to the tracking URI.
+    #: Two tracking databases used from the same directory therefore share one
+    #: artifact tree, keyed by an experiment id each assigns independently, so
+    #: unrelated migrations interleave and one store's cleanup can delete the
+    #: other's bytes. Set this whenever the tracking store is not the default.
+    artifact_root: str | None = None
 
 
 @dataclass
@@ -223,10 +256,38 @@ class Migrator:
     # -- experiment ------------------------------------------------------- #
 
     def ensure_experiment(self, name: str) -> str:
+        """Find or create the target experiment.
+
+        ``artifact_location`` is only meaningful at creation time: MLflow stores
+        it on the experiment row and ignores it thereafter. An existing
+        experiment therefore keeps whatever root it was created with, and a
+        later ``--artifact-root`` cannot move bytes already written.
+        """
         existing = self.client.get_experiment_by_name(name)
         if existing is not None:
+            if self.options.artifact_root:
+                configured = str(Path(self.options.artifact_root).expanduser().resolve())
+                actual = str(existing.artifact_location)
+                if not actual.startswith(configured) and not actual.startswith(
+                    self.options.artifact_root
+                ):
+                    logger.warning(
+                        "experiment %r already exists with artifact location %s; "
+                        "--artifact-root %s applies only to newly created experiments "
+                        "and is being ignored",
+                        name,
+                        actual,
+                        self.options.artifact_root,
+                    )
             return str(existing.experiment_id)
-        return str(self.client.create_experiment(name))
+        location: str | None = None
+        if self.options.artifact_root:
+            root = Path(self.options.artifact_root).expanduser()
+            # Resolved to an absolute path deliberately: MLflow records this
+            # string verbatim, and a relative one would re-resolve against
+            # whatever directory a later reader happens to be sitting in.
+            location = str(root.resolve() / _experiment_dirname(name))
+        return str(self.client.create_experiment(name, artifact_location=location))
 
     # -- entry point ------------------------------------------------------ #
 
@@ -373,7 +434,7 @@ class Migrator:
                         assert reason is not None
                         report.dropped.record(reason, media_type)
                         continue
-                    raw.append((f"{prefix}{key}", metric, step, row_ts))
+                    raw.append((_prefixed(prefix, str(key)), metric, step, row_ts))
 
         summary_points, summary_renames = self._summary_metrics(run, report, start_ms)
         raw.extend(summary_points)

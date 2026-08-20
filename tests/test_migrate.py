@@ -657,3 +657,98 @@ def test_a_failure_in_one_worker_does_not_stop_the_others(client: MlflowClient) 
     result, _ = migrate(client, runs, workers=8)
     assert len(result.failures) == 1
     assert len(result.migrated) == len(fixtures.all_runs())
+
+
+# --------------------------------------------------------------------------- #
+# system-metric key prefixing
+# --------------------------------------------------------------------------- #
+
+
+def test_system_metric_keys_wandb_already_prefixed_are_not_doubled(
+    client: MlflowClient,
+) -> None:
+    """W&B returns ``system.cpu``, not ``cpu``.
+
+    Prefixing unconditionally produced ``system.system.cpu``, which is not the
+    key MAPPING.md promises and not the key anyone would search the UI for.
+    """
+    source = fixtures.run_bools()
+    source.system_rows = [
+        {"_timestamp": fixtures.BASE_TS, "system.cpu": 12.5, "gpu.0.memory": 40.0},
+        {"_timestamp": fixtures.BASE_TS + 5, "system.cpu": 30.0, "gpu.0.memory": 55.0},
+    ]
+    result, _ = migrate(client, [source], include_system_metrics=True)
+    keys = get_run(client, result, "r04-bools").data.metrics
+
+    assert "system.cpu" in keys
+    assert "system.system.cpu" not in keys
+    # A key W&B did *not* prefix still gets one, so the namespace stays honest.
+    assert "system.gpu.0.memory" in keys
+
+
+def test_prefixing_leaves_the_data_stream_alone() -> None:
+    """The empty prefix must never rewrite an ordinary metric key."""
+    from wandb_to_mlflow.migrate import _prefixed
+
+    assert _prefixed("", "system.cpu") == "system.cpu"
+    assert _prefixed("", "loss") == "loss"
+    assert _prefixed("system.", "cpu") == "system.cpu"
+    assert _prefixed("system.", "system.cpu") == "system.cpu"
+
+
+# --------------------------------------------------------------------------- #
+# artifact root
+# --------------------------------------------------------------------------- #
+
+
+def test_artifact_root_is_honoured_for_new_experiments(tmp_path: Path) -> None:
+    """MLflow's default artifact root follows the *working directory*, not the
+    tracking URI, so two stores used from one directory silently share a tree."""
+    client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}")
+    root = tmp_path / "artifacts"
+    migrator = Migrator(
+        client,
+        MigrateOptions(experiment="my-experiment", artifact_root=str(root)),
+    )
+    experiment_id = migrator.ensure_experiment("my-experiment")
+    location = client.get_experiment(experiment_id).artifact_location
+
+    assert str(root.resolve()) in location
+    assert location.endswith("my-experiment")
+
+
+def test_artifact_root_cannot_escape_via_the_experiment_name(tmp_path: Path) -> None:
+    """A name is not a path. ``../`` and ``/`` must not climb out or nest."""
+    from wandb_to_mlflow.migrate import _experiment_dirname
+
+    for hostile in ("../../etc", "team/project", "/absolute", "..", ""):
+        cleaned = _experiment_dirname(hostile)
+        assert "/" not in cleaned
+        assert cleaned not in ("", ".", "..")
+
+
+def test_without_artifact_root_mlflow_default_is_untouched(tmp_path: Path) -> None:
+    """The flag is opt-in: unset must not change where MLflow puts things."""
+    client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}")
+    migrator = Migrator(client, MigrateOptions(experiment="plain"))
+    experiment_id = migrator.ensure_experiment("plain")
+    assert "mlruns" in client.get_experiment(experiment_id).artifact_location
+
+
+def test_artifact_root_on_an_existing_experiment_warns_rather_than_lying(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MLflow stores artifact_location at creation and ignores it after.
+
+    Silently accepting the flag would promise a relocation that never happens.
+    """
+    client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}")
+    Migrator(client, MigrateOptions(experiment="already")).ensure_experiment("already")
+
+    with caplog.at_level("WARNING"):
+        Migrator(
+            client,
+            MigrateOptions(experiment="already", artifact_root=str(tmp_path / "elsewhere")),
+        ).ensure_experiment("already")
+
+    assert any("applies only to newly created experiments" in r.message for r in caplog.records)

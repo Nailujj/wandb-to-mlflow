@@ -12,3 +12,13 @@ wandb/
 manifest.json
 dist/
 build/
+
+# Local MLflow tracking stores. Never commit one: it is a binary blob of
+# whatever runs happened to be migrated on someone's laptop, it churns on
+# every use, and it ships inside the sdist if git is tracking it.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

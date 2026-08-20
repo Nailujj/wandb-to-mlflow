@@ -36,6 +36,14 @@ T = TypeVar("T")
 #: points; ``scan_history`` with an explicit page size does not.
 SCAN_PAGE_SIZE = 1000
 
+#: How many system-metric samples to ask for. Unlike the default history stream,
+#: the system stream has no exhaustive reader: ``scan_history`` takes no
+#: ``stream`` argument at all, so ``history(stream="system")`` -- which samples
+#: server-side -- is the only way in. Asking for more than exist is harmless and
+#: returns what there is, so this is set far above any realistic sample count
+#: rather than left at W&B's default of 500.
+SYSTEM_METRIC_SAMPLES = 100_000
+
 _RETRY_ATTEMPTS = int(os.environ.get("W2M_RETRY_ATTEMPTS", "5"))
 _RETRY_MAX_WAIT = float(os.environ.get("W2M_RETRY_MAX_WAIT", "30"))
 
@@ -291,11 +299,23 @@ class WandbRun:
         yield from _scan()
 
     def system_metrics(self) -> Iterator[dict[str, Any]]:
-        """Server-sampled system metrics. Opt-in; see MAPPING.md."""
+        """Server-sampled system metrics. Opt-in; see MAPPING.md.
+
+        Read through ``history(stream="system")``, not ``scan_history``. The
+        stream used to be reachable as ``scan_history(stream="events")``; that
+        signature is gone -- current ``scan_history`` accepts no ``stream`` at
+        all and raises ``TypeError`` on one, which failed every run in the
+        migration rather than just this stream. There is no exhaustive reader
+        for it, so these points are server-sampled, as MAPPING.md says.
+
+        Keys arrive already prefixed ``system.`` by W&B. The migrator's own
+        prefixing is idempotent, so they are not renamed here.
+        """
 
         @with_retry
-        def _scan() -> Iterator[dict[str, Any]]:
-            return iter(self._raw.scan_history(stream="events", page_size=SCAN_PAGE_SIZE))
+        def _scan() -> list[dict[str, Any]]:
+            rows = self._raw.history(stream="system", samples=SYSTEM_METRIC_SAMPLES, pandas=False)
+            return list(rows or [])
 
         yield from _scan()
 

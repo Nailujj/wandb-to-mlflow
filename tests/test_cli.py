@@ -277,6 +277,72 @@ def test_verify_live_mode_works(tracking_uri: str) -> None:
     assert result.exit_code == 0, result.output
 
 
+def test_verify_live_mode_needs_the_same_opt_in_flags_as_the_migration(
+    tracking_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correct `--system-metrics` migration must not verify as broken.
+
+    Live verification re-plans the migration to derive expectations. Planning
+    without the flag the migration ran with makes every correctly-migrated
+    `system.*` series look like a metric that should not be there.
+    """
+
+    def connect(entity: str, project: str, filters: Any = None) -> fixtures.FakeProject:
+        run = fixtures.run_bools()
+        run.system_rows = [
+            {"_timestamp": fixtures.BASE_TS, "system.cpu": 12.5},
+            {"_timestamp": fixtures.BASE_TS + 5, "system.cpu": 30.0},
+        ]
+        return fixtures.FakeProject(entity=entity, project=project, run_list=[run])
+
+    monkeypatch.setattr(cli.WandbProject, "connect", staticmethod(connect))
+
+    migrated = invoke(
+        "migrate",
+        "-e",
+        "acme",
+        "-p",
+        "demo",
+        "--experiment",
+        "sysm",
+        "--system-metrics",
+        "true",
+        "--tracking-uri",
+        tracking_uri,
+    )
+    assert migrated.exit_code == 0, migrated.output
+
+    matched = invoke(
+        "verify",
+        "-e",
+        "acme",
+        "-p",
+        "demo",
+        "--experiment",
+        "sysm",
+        "--system-metrics",
+        "true",
+        "--tracking-uri",
+        tracking_uri,
+    )
+    assert matched.exit_code == 0, matched.output
+
+    # And the mismatch is still reported when the two genuinely disagree.
+    mismatched = invoke(
+        "verify",
+        "-e",
+        "acme",
+        "-p",
+        "demo",
+        "--experiment",
+        "sysm",
+        "--tracking-uri",
+        tracking_uri,
+    )
+    assert mismatched.exit_code != 0
+    assert "system.cpu" in mismatched.output
+
+
 def test_verify_json_output(seeded: Path, tracking_uri: str) -> None:
     result = invoke(
         "verify",

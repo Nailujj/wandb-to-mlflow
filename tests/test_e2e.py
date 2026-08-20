@@ -77,7 +77,17 @@ def test_the_whole_loop(seeded: tuple[str, object], tmp_path: Path) -> None:
     uri = f"file://{tmp_path / 'mlruns'}"
     client = MlflowClient(tracking_uri=uri)
 
-    options = MigrateOptions(experiment=project, include_artifacts=True, include_files=True)
+    # include_system_metrics is on deliberately. It was the one opt-in flag no
+    # tier ever exercised against real W&B, which is exactly how a call to a
+    # deleted `scan_history(stream=...)` parameter survived: the fakes accepted
+    # it and the live tier never asked. Every flag the CLI offers is now flown
+    # at least once against the real API.
+    options = MigrateOptions(
+        experiment=project,
+        include_artifacts=True,
+        include_files=True,
+        include_system_metrics=True,
+    )
     result = Migrator(client, options).migrate_project(WandbProject.connect(ENTITY, project))
     assert result.failures == [], [r.error for r in result.failures]
 

@@ -98,6 +98,19 @@ TrackingUriOption = Annotated[
     str,
     typer.Option("--tracking-uri", help="MLflow tracking URI. Defaults to MLFLOW_TRACKING_URI."),
 ]
+ArtifactRootOption = Annotated[
+    str,
+    typer.Option(
+        "--artifact-root",
+        help=(
+            "Where to put artifact bytes for experiments this tool creates. "
+            "MLflow's default is ./mlruns relative to the working directory, "
+            "which is NOT derived from --tracking-uri: two stores used from one "
+            "directory otherwise share an artifact tree. Applies at experiment "
+            "creation only."
+        ),
+    ),
+]
 JsonOption = Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")]
 VerboseOption = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")]
 
@@ -115,6 +128,7 @@ def build_options(
     overwrite: bool,
     dry_run: bool,
     workers: int = 1,
+    artifact_root: str = "",
 ) -> MigrateOptions:
     return MigrateOptions(
         experiment=experiment or None,
@@ -125,6 +139,7 @@ def build_options(
         overwrite=overwrite,
         dry_run=dry_run,
         workers=workers,
+        artifact_root=artifact_root or None,
     )
 
 
@@ -301,6 +316,7 @@ def migrate(
     overwrite: Annotated[bool, typer.Option("--overwrite", help="Replace existing runs.")] = False,
     workers: Annotated[int, typer.Option("--workers", help="Runs to migrate in parallel.")] = 1,
     tracking_uri: TrackingUriOption = "",
+    artifact_root: ArtifactRootOption = "",
     as_json: JsonOption = False,
     verbose: VerboseOption = False,
 ) -> None:
@@ -315,6 +331,7 @@ def migrate(
         overwrite,
         dry_run=False,
         workers=workers,
+        artifact_root=artifact_root,
     )
     source = WandbProject.connect(entity, project)
     migrator = Migrator(build_client(tracking_uri), options)
@@ -336,11 +353,21 @@ def verify(
     ] = None,
     entity: Annotated[str, typer.Option("--entity", "-e")] = "",
     project: Annotated[str, typer.Option("--project", "-p")] = "",
+    artifacts: Annotated[str, typer.Option("--artifacts")] = "false",
+    files: Annotated[str, typer.Option("--files")] = "false",
+    system_metrics: Annotated[str, typer.Option("--system-metrics")] = "false",
     tracking_uri: TrackingUriOption = "",
     as_json: JsonOption = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """Check a migration, either against a seeded manifest or against live W&B."""
+    """Check a migration, either against a seeded manifest or against live W&B.
+
+    Live mode re-plans the migration to derive its expectations, so it must be
+    told which opt-in streams the migration actually used. Verifying a
+    ``--system-metrics true`` migration without the same flag reports every
+    correctly-migrated ``system.*`` series as an unexpected extra metric --
+    a false failure on a migration that was right.
+    """
     setup_logging(verbose)
     if manifest is None and not (entity and project):
         raise typer.BadParameter("pass either --manifest, or both --entity and --project")
@@ -350,7 +377,12 @@ def verify(
     else:
         loaded = manifest_from_source(
             WandbProject.connect(entity, project),
-            MigrateOptions(experiment=experiment),
+            MigrateOptions(
+                experiment=experiment,
+                include_artifacts=parse_bool(artifacts, "--artifacts"),
+                include_files=parse_bool(files, "--files"),
+                include_system_metrics=parse_bool(system_metrics, "--system-metrics"),
+            ),
             client=client,
         )
     report = Verifier(client).verify(loaded, experiment)
