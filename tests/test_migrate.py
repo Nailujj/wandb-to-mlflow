@@ -772,3 +772,54 @@ def test_artifact_root_on_an_existing_experiment_warns_rather_than_lying(
         module_logger.removeHandler(handler)
 
     assert any("applies only to newly created experiments" in r.getMessage() for r in records)
+
+
+# --------------------------------------------------------------------------- #
+# progress reporting
+# --------------------------------------------------------------------------- #
+
+
+def test_on_report_fires_once_per_run_with_the_final_total(client: MlflowClient) -> None:
+    """The CLI's progress bar hangs off this contract: one call per run,
+    (report, completed, total), failures and skips included."""
+    runs = [fixtures.run_bools(), fixtures.run_sparse(), fixtures.run_empty_history()]
+    calls: list[tuple[str, int, int]] = []
+
+    project = fixtures.FakeProject(run_list=runs)
+    migrator = Migrator(client, MigrateOptions(experiment="progress"))
+    result = migrator.migrate_project(
+        project, on_report=lambda r, done, total: calls.append((r.wandb_run_id, done, total))
+    )
+
+    assert len(calls) == 3
+    assert {total for _, _, total in calls} == {3}
+    assert sorted(done for _, done, _ in calls) == [1, 2, 3]
+    # The callback never reorders the result itself.
+    assert [r.wandb_run_id for r in result.reports] == [r.id for r in runs]
+
+
+def test_on_report_counts_skipped_runs(client: MlflowClient) -> None:
+    """An idempotent re-run must not show an empty or stuck bar."""
+    runs = [fixtures.run_bools(), fixtures.run_sparse()]
+    project = fixtures.FakeProject(run_list=runs)
+    Migrator(client, MigrateOptions(experiment="progress2")).migrate_project(project)
+
+    reports: list[Any] = []
+    Migrator(client, MigrateOptions(experiment="progress2")).migrate_project(
+        project, on_report=lambda r, done, total: reports.append(r)
+    )
+    assert len(reports) == 2
+    assert all(r.skipped for r in reports)
+
+
+def test_on_report_under_workers_keeps_reports_in_submission_order(
+    client: MlflowClient,
+) -> None:
+    runs = [fixtures.run_bools(), fixtures.run_sparse(), fixtures.run_empty_history()]
+    seen: list[int] = []
+    result = Migrator(client, MigrateOptions(experiment="progress3", workers=3)).migrate_project(
+        fixtures.FakeProject(run_list=runs),
+        on_report=lambda r, done, total: seen.append(done),
+    )
+    assert sorted(seen) == [1, 2, 3]
+    assert [r.wandb_run_id for r in result.reports] == [r.id for r in runs]

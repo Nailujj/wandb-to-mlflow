@@ -7,14 +7,25 @@ text at whoever imported it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 from mlflow.tracking import MlflowClient
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from wandb_to_mlflow import __version__
 from wandb_to_mlflow import seed as seed_module
@@ -82,6 +93,51 @@ def echo(text: str) -> None:
 
 def emit_json(payload: Any) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+ProgressCallback = Callable[[Any, int, int], None]
+
+
+@contextlib.contextmanager
+def run_progress(verb: str, target: str, enabled: bool) -> Iterator[ProgressCallback]:
+    """A live progress bar over the runs of one migration or plan.
+
+        Migrating my-project ━━━━━━━╸━━━ 12/20 0:00:42 resnet50-lr0.01
+
+    Rendered on **stderr**, so stdout stays exactly what it always was --
+    pipeable text or ``--json`` -- and disabled outright when stderr is not a
+    terminal or the caller asked for JSON, where a repainting bar is noise in a
+    log file. Stray prints from inside the migration (wandb's download chatter,
+    for one) are redirected above the live line by rich rather than tearing it.
+
+    Yields an ``on_report`` callback for :meth:`Migrator.migrate_project`. The
+    run total is only known once the source has been listed, so the bar starts
+    indeterminate and locks to N the first time the callback fires. rich's
+    ``Progress`` is thread-safe, which ``--workers`` relies on.
+    """
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn(f"[bold]{verb}[/bold] {target}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TextColumn("[dim]{task.fields[current]}[/dim]"),
+        console=Console(stderr=True),
+        disable=not enabled,
+        transient=True,
+    )
+    task = progress.add_task(verb.lower(), total=None, current="listing runs...")
+    with progress:
+
+        def on_report(report: Any, completed: int, total: int) -> None:
+            label = report.wandb_name or report.wandb_run_id
+            if report.error is not None:
+                label = f"[red]failed:[/red] {label}"
+            elif report.skipped and report.skip_reason is None:
+                label = f"skipped {label}"
+            progress.update(task, advance=1, total=total, current=label)
+
+        yield on_report
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +347,8 @@ def plan(
         experiment, artifacts, files, system_metrics, max_artifact_size, False, dry_run=True
     )
     source = WandbProject.connect(entity, project)
-    result = _run_plan(source, options, tracking_uri)
+    with run_progress("Planning", project, enabled=sys.stderr.isatty() and not as_json) as tick:
+        result = _run_plan(source, options, tracking_uri, on_report=tick)
     if as_json:
         emit_json({"plan": [r.as_dict() for r in result.reports]})
     else:
@@ -299,9 +356,14 @@ def plan(
     raise typer.Exit(1 if result.failures else 0)
 
 
-def _run_plan(source: SourceProject, options: MigrateOptions, tracking_uri: str) -> MigrationResult:
+def _run_plan(
+    source: SourceProject,
+    options: MigrateOptions,
+    tracking_uri: str,
+    on_report: ProgressCallback | None = None,
+) -> MigrationResult:
     migrator = Migrator(build_client(tracking_uri), options)
-    return migrator.migrate_project(source)
+    return migrator.migrate_project(source, on_report=on_report)
 
 
 @app.command()
@@ -335,7 +397,8 @@ def migrate(
     )
     source = WandbProject.connect(entity, project)
     migrator = Migrator(build_client(tracking_uri), options)
-    result = migrator.migrate_project(source)
+    with run_progress("Migrating", project, enabled=sys.stderr.isatty() and not as_json) as tick:
+        result = migrator.migrate_project(source, on_report=tick)
     if as_json:
         emit_json(
             {"experiment_id": result.experiment_id, "runs": [r.as_dict() for r in result.reports]}

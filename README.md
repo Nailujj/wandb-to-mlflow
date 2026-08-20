@@ -1,12 +1,22 @@
 # wandb-to-mlflow
 
-Migrate Weights & Biases runs into any MLflow tracking server.
+**Migrate, export, and back up your Weights & Biases (W&B / wandb) experiments
+to MLflow** — metrics, configs, artifacts, media files, and sweeps, into any
+MLflow tracking server you control.
+
+[![CI](https://github.com/Nailujj/wandb-to-mlflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Nailujj/wandb-to-mlflow/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/wandb-to-mlflow)](https://pypi.org/project/wandb-to-mlflow/)
+[![Python](https://img.shields.io/pypi/pyversions/wandb-to-mlflow)](https://pypi.org/project/wandb-to-mlflow/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Point it at a W&B project, tell it where your MLflow store is, and it copies the
-runs across: config as params, history as metric series with their original step
-numbers, summaries as `final.*` metrics, tags, groups, sweep nesting, run files
-and artifact bytes. It reads from W&B and never writes to it, so you can migrate,
-check the result, and decide about your subscription afterwards.
+runs across: config as params, full training history as metric series with their
+original step numbers, summaries as `final.*` metrics, tags, groups, sweep
+nesting, run files and artifact bytes. It **reads from W&B and never writes to
+it**, so you can migrate, check the result, and decide about your subscription
+afterwards. Works with self-hosted MLflow, a local SQLite store, or any remote
+tracking server — anywhere you want your experiment data to live after leaving
+wandb.ai.
 
 **New here? Start with [Quickstart](#quickstart).**
 **About to cancel your W&B subscription? Read [What survives](#what-survives-and-what-does-not) first.**
@@ -24,6 +34,7 @@ check the result, and decide about your subscription afterwards.
 - [It tests itself](#it-tests-itself)
 - [As an MLflow Project](#as-an-mlflow-project)
 - [UI acceptance checklist](#ui-acceptance-checklist)
+- [FAQ](#faq)
 - [Development](#development)
 
 ---
@@ -41,6 +52,14 @@ check the result, and decide about your subscription afterwards.
   just as well.
 
 ## Install
+
+From PyPI:
+
+```bash
+pip install wandb-to-mlflow
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/Nailujj/wandb-to-mlflow.git
@@ -119,6 +138,9 @@ wandb-to-mlflow migrate --entity my-team --project my-project \
     --files true --artifacts true \
     --artifact-root ./mlflow-artifacts
 ```
+
+A live progress bar tracks the runs as they land. It draws on stderr and clears
+itself when done, so piped output and `--json` stay untouched.
 
 **6. Check it.** Live verification re-derives what the migration should have
 produced and compares it against what is actually in MLflow. **Pass the same
@@ -507,6 +529,49 @@ and check by eye:
 - [ ] `with-artifacts` has an `artifacts/small-dataset*/` folder containing
       `data.csv` and `_wandb_artifact.json`, and a `wandb.reference_artifacts`
       tag whose bytes were **not** fetched.
+
+## FAQ
+
+### How do I export my data from Weights & Biases before cancelling?
+
+Run this tool while your W&B subscription (or free-tier access) is still
+active — it needs read access to the API. `plan` first to see exactly what
+will and will not come across, then `migrate` with `--files true --artifacts
+true` for the fullest copy, then `verify`. Export W&B **Reports** separately
+from the web UI; they are the one thing with no API to read from
+([details](#what-survives-and-what-does-not)).
+
+### Is this a W&B to MLflow converter, or a sync tool?
+
+A one-way, re-runnable copier. It converts W&B runs into MLflow's data model
+in a single direction; re-running picks up runs that are new or previously
+failed and skips everything already migrated. It is not a live two-way sync,
+and it never writes to W&B.
+
+### Can it delete or corrupt my W&B data?
+
+No. The migration path calls six read-only W&B APIs and nothing else, and the
+test suite enforces that at the AST level — see
+[Your W&B data is never touched](#your-wb-data-is-never-touched).
+
+### Does it work with a self-hosted MLflow server?
+
+Yes — anything `MlflowClient` accepts as a tracking URI: a local SQLite file,
+`http(s)://` tracking servers, or a database URI. Pass `--artifact-root` so
+artifact bytes land where you expect
+([why](#--tracking-uri-does-not-decide-where-artifact-bytes-go)).
+
+### Are sweeps migrated?
+
+The runs and their parent/child structure, yes: each sweep becomes a parent
+MLflow run with its children nested beneath it. The sweep's search-space
+configuration is not migrated ([full list](#what-survives-and-what-does-not)).
+
+### How long does a migration take?
+
+Metrics-only migration of a typical project is seconds to minutes; `--files`
+and `--artifacts` add download time for the bytes. `--workers N` migrates N
+runs in parallel, and a progress bar shows where you are.
 
 ## Development
 

@@ -18,7 +18,8 @@ import json
 import logging
 import re
 import tempfile
-from collections.abc import Iterable, Iterator, Sequence
+import threading
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -291,7 +292,22 @@ class Migrator:
 
     # -- entry point ------------------------------------------------------ #
 
-    def migrate_project(self, source: SourceProject) -> MigrationResult:
+    def migrate_project(
+        self,
+        source: SourceProject,
+        on_report: Callable[[RunReport, int, int], None] | None = None,
+    ) -> MigrationResult:
+        """Migrate every run in ``source``.
+
+        ``on_report`` is the library's only progress channel: it is invoked once
+        per run as ``on_report(report, completed, total)`` the moment that run
+        finishes (skips and failures included), and never with anything else.
+        The CLI hangs its progress bar on it; the library itself stays silent,
+        per the module contract. With ``workers > 1`` the callback fires from
+        worker threads in completion order -- whatever it touches must be
+        thread-safe -- while ``result.reports`` stays in submission order
+        regardless.
+        """
         name = self.options.experiment or source.project
         result = MigrationResult(experiment_name=name)
         if self.options.dry_run:
@@ -307,14 +323,28 @@ class Migrator:
             self.state = None
 
         runs = list(source.runs())
+        total = len(runs)
+        completed = 0
+        counter_lock = threading.Lock()
+
+        def guarded(run: SourceRun) -> RunReport:
+            report = self._guarded(run, result.experiment_id)
+            if on_report is not None:
+                nonlocal completed
+                with counter_lock:
+                    completed += 1
+                    snapshot = completed
+                on_report(report, snapshot, total)
+            return report
+
         workers = max(1, self.options.workers)
         if workers == 1:
-            result.reports.extend(self._guarded(run, result.experiment_id) for run in runs)
+            result.reports.extend(guarded(run) for run in runs)
         else:
             # Reports are collected in submission order, so a migration's output
             # does not depend on which worker happened to finish first.
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(self._guarded, run, result.experiment_id) for run in runs]
+                futures = [pool.submit(guarded, run) for run in runs]
                 result.reports.extend(future.result() for future in futures)
         return result
 
