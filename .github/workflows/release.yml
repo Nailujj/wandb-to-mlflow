@@ -1,0 +1,64 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Uses PyPI trusted publishing (OIDC), so there is no API token to store or
+# leak. One-time setup on PyPI: project settings -> Publishing -> add GitHub
+# publisher for Nailujj/wandb-to-mlflow, workflow "release.yml",
+# environment "pypi".
+#
+# The tag must match the package version: the guard step fails the release
+# rather than shipping a wheel whose metadata disagrees with its tag.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - run: uv run ruff check .
+      - run: uv run mypy --strict src/
+      - run: uv run pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Tag must match the package version
+        run: |
+          uv venv --python 3.12 && uv pip install -e .
+          PKG=$(uv run python -c "import wandb_to_mlflow; print(wandb_to_mlflow.__version__)")
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::tag v$TAG does not match __version__ $PKG"
+            exit 1
+          fi
+      - run: uv build
+      - run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

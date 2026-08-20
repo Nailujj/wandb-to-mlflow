@@ -102,7 +102,8 @@ def _rows(count: int, **series: Any) -> list[dict[str, Any]]:
 
 
 def build_specs() -> list[RunSpec]:
-    """The 16 hostile cases from the build spec, one per failure mode.
+    """The hostile cases from the build spec -- 17 standalone runs plus a
+    3-child sweep, one per failure mode.
 
     Mirrors ``tests/fixtures.py`` exactly. A case added in one place must be
     added in the other; a test asserts the two stay in step.

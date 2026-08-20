@@ -1,12 +1,13 @@
 """The adapter must call W&B with signatures W&B actually has.
 
 This is the tier that was missing. Unit tests elsewhere replace the W&B client
-with a fake that accepts anything, so they keep passing when the real signature
-moves underneath them; the e2e tier can catch that, but only for the code paths
-it happens to enable, and it never enabled ``--system-metrics``. That gap let
-``scan_history(stream="events")`` survive in the tree long after ``stream`` was
-removed from ``scan_history`` -- a call that failed *every run* in the
-migration, not merely the system-metric stream.
+with a fake that accepts anything, so they pass whether or not the real API has
+the signature being called; the e2e tier can catch that, but only for the code
+paths it happens to enable, and it never enabled ``--system-metrics``. That gap
+let ``scan_history(stream="events")`` ship -- a parameter that has **never
+existed in any released wandb** (verified against the published wheels back to
+0.15), so the call was broken from the day it was written and failed *every
+run* in the migration, not merely the system-metric stream.
 
 So these tests bind our real call arguments against the **installed** wandb's
 real signatures, using ``inspect.Signature.bind``. No network, no fake that
@@ -89,7 +90,7 @@ def adapter(raw: SignatureCheckedRun) -> WandbRun:
 
 
 def test_system_metrics_call_is_one_wandb_accepts() -> None:
-    """The exact failure: ``scan_history(stream=...)`` no longer binds."""
+    """The exact failure: ``scan_history(stream=...)`` has never bound."""
     raw = SignatureCheckedRun([{"_timestamp": 1.0, "system.cpu": 12.5}])
     rows = list(adapter(raw).system_metrics())
 
@@ -101,7 +102,7 @@ def test_system_metrics_call_is_one_wandb_accepts() -> None:
 
 
 def test_scan_history_is_not_asked_for_a_stream() -> None:
-    """Guards the specific dead parameter, in case someone reintroduces it."""
+    """Guards the specific phantom parameter, in case someone reintroduces it."""
     assert "stream" not in signature_of("scan_history").parameters
 
 

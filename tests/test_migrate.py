@@ -736,19 +736,39 @@ def test_without_artifact_root_mlflow_default_is_untouched(tmp_path: Path) -> No
 
 
 def test_artifact_root_on_an_existing_experiment_warns_rather_than_lying(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
 ) -> None:
     """MLflow stores artifact_location at creation and ignores it after.
 
     Silently accepting the flag would promise a relocation that never happens.
+
+    Captured with a handler on the module logger, not ``caplog``: creating a
+    fresh SQLite store makes MLflow 2.x run its alembic migrations, and
+    alembic's ``fileConfig`` replaces the *root* logger's handlers mid-test --
+    which silently removes caplog's capture handler, so the warning fires and
+    caplog never sees it. A handler attached to the package logger itself is
+    outside alembic's reach on every MLflow version.
     """
+    import logging
+
     client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}")
     Migrator(client, MigrateOptions(experiment="already")).ensure_experiment("already")
 
-    with caplog.at_level("WARNING"):
+    records: list[logging.LogRecord] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Capture(level=logging.WARNING)
+    module_logger = logging.getLogger("wandb_to_mlflow.migrate")
+    module_logger.addHandler(handler)
+    try:
         Migrator(
             client,
             MigrateOptions(experiment="already", artifact_root=str(tmp_path / "elsewhere")),
         ).ensure_experiment("already")
+    finally:
+        module_logger.removeHandler(handler)
 
-    assert any("applies only to newly created experiments" in r.message for r in caplog.records)
+    assert any("applies only to newly created experiments" in r.getMessage() for r in records)

@@ -301,12 +301,15 @@ class WandbRun:
     def system_metrics(self) -> Iterator[dict[str, Any]]:
         """Server-sampled system metrics. Opt-in; see MAPPING.md.
 
-        Read through ``history(stream="system")``, not ``scan_history``. The
-        stream used to be reachable as ``scan_history(stream="events")``; that
-        signature is gone -- current ``scan_history`` accepts no ``stream`` at
-        all and raises ``TypeError`` on one, which failed every run in the
-        migration rather than just this stream. There is no exhaustive reader
-        for it, so these points are server-sampled, as MAPPING.md says.
+        Read through ``history(stream="system")``, not ``scan_history``. This
+        code once called ``scan_history(stream="events")`` -- a signature that
+        has **never existed in any released wandb** (checked against the
+        published wheels back to 0.15): ``scan_history`` takes no ``stream``
+        argument and raises ``TypeError`` on one, which failed every run in the
+        migration rather than just this stream. The flag was broken from the
+        day it was written, and no offline test could see it because the fakes
+        accepted the phantom argument. There is no exhaustive reader for this
+        stream, so these points are server-sampled, as MAPPING.md says.
 
         Keys arrive already prefixed ``system.`` by W&B. The migrator's own
         prefixing is idempotent, so they are not renamed here.

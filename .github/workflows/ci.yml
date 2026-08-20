@@ -23,3 +23,21 @@ jobs:
       - run: uv run pytest -q --cov=wandb_to_mlflow --cov-branch --cov-report=term-missing
       - name: coerce.py must stay at 100% branch coverage
         run: uv run pytest tests/test_coerce.py --cov=wandb_to_mlflow.coerce --cov-branch --cov-fail-under=100 -q
+
+  # The declared dependency floors must actually work. `--resolution
+  # lowest-direct` installs the exact minima from pyproject.toml, so this job
+  # goes red the moment a floor is fiction -- the failure mode where nobody
+  # ever tests the oldest supported versions because every other environment
+  # resolves the newest. (The old `mlflow>=2.9` floor could not even be
+  # imported; this job is what makes that impossible to reintroduce.)
+  floors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.10
+      - run: uv pip install --resolution lowest-direct -e .
+      # Test tooling at latest, separately: lowest-direct would otherwise drag
+      # the unbounded dev extras down to unbuildable museum pieces.
+      - run: uv pip install pytest pyyaml
+      - run: uv run pytest -q
