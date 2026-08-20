@@ -110,8 +110,18 @@ def test_python_env_version_satisfies_the_package_floor() -> None:
 
 
 def test_dependencies_match_the_fixed_set() -> None:
-    """Spec: the dependency list is fixed. Anything new needs a DECISIONS entry."""
-    import tomllib
+    """Spec: the dependency list is fixed. Anything new needs a DECISIONS entry.
+
+    ``tomllib`` is stdlib only from 3.11, while this project supports 3.10 and
+    CI runs both. Skipping on 3.10 rather than taking a ``tomli`` dependency:
+    what this asserts is the *content of pyproject.toml*, which does not vary by
+    interpreter, so the 3.12 leg enforces it for every leg. Adding a dependency
+    to test the list of dependencies would also have to be added to the list
+    this very test pins.
+    """
+    tomllib = pytest.importorskip(
+        "tomllib", reason="stdlib TOML parser lands in 3.11; the 3.12 leg covers this"
+    )
 
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     runtime = {re.split(r"[><=\[]", dep)[0].strip() for dep in pyproject["project"]["dependencies"]}
