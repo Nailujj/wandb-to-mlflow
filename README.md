@@ -13,13 +13,12 @@ Point it at a W&B project, tell it where your MLflow store is, and it copies the
 runs across: config as params, full training history as metric series with their
 original step numbers, summaries as `final.*` metrics, tags, groups, sweep
 nesting, run files and artifact bytes. It **reads from W&B and never writes to
-it**, so you can migrate, check the result, and decide about your subscription
-afterwards. Works with self-hosted MLflow, a local SQLite store, or any remote
-tracking server — anywhere you want your experiment data to live after leaving
-wandb.ai.
+it**, so you can migrate, check the result, and keep using both side by side
+until you are confident in the copy. Works with self-hosted MLflow, a local
+SQLite store, or any remote tracking server.
 
 **New here? Start with [Quickstart](#quickstart).**
-**About to cancel your W&B subscription? Read [What survives](#what-survives-and-what-does-not) first.**
+**Moving off W&B? Read [What survives](#what-survives-and-what-does-not) first.**
 
 - [Requirements](#requirements)
 - [Install](#install)
@@ -292,8 +291,8 @@ Live mode needs the **same opt-in flags the migration ran with**. Verifying a
 ## What survives, and what does not
 
 Some things **do not survive the migration**. Not "degrade" — are not migrated at
-all. If any of these matter to you, export them separately **before** you lose
-access:
+all. If any of these matter to you, export them separately while you still have
+API access:
 
 | Not migrated | What that means |
 |---|---|
@@ -532,12 +531,11 @@ and check by eye:
 
 ## FAQ
 
-### How do I export my data from Weights & Biases before cancelling?
+### How do I export my data from Weights & Biases?
 
-Run this tool while your W&B subscription (or free-tier access) is still
-active — it needs read access to the API. `plan` first to see exactly what
-will and will not come across, then `migrate` with `--files true --artifacts
-true` for the fullest copy, then `verify`. Export W&B **Reports** separately
+Run this tool while your account still has read access to the W&B API.
+`plan` first to see exactly what will and will not come across, then `migrate`
+with `--files true --artifacts true` for the fullest copy, then `verify`. Export W&B **Reports** separately
 from the web UI; they are the one thing with no API to read from
 ([details](#what-survives-and-what-does-not)).
 
